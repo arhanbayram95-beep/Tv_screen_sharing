@@ -97,6 +97,49 @@ TV Bro plus this page's built-in D-pad navigation is the combination that behave
 
 ---
 
+## Phones and tablets
+
+The same page adapts to touch — there is no separate app to install.
+
+| Mobile use | Works? | Requirement |
+|---|---|---|
+| **Phone/tablet as viewer** | Yes | Plain HTTP is fine |
+| **Phone camera → TV** | Yes | **Needs HTTPS** |
+| **Mirroring the phone's own screen** | No | Not possible from any mobile browser |
+
+### Watching on a phone
+
+Open `http://<computer-ip>:3000/tv`, tap in the PIN, tap **OK — Play with sound**. Tapping the
+picture hides and shows the controls, **Fullscreen** rotates to landscape where the browser permits
+it, and the screen is kept awake while you watch.
+
+### Sending the phone's camera
+
+Useful as a document camera or a second angle. The phone needs a **secure page** — browsers refuse
+camera access on `http://192.168.x.x` — so start the server with TLS:
+
+```bash
+mkdir -p certs
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout certs/key.pem -out certs/cert.pem -subj "/CN=$(hostname -I | awk '{print $1}')"
+
+TLS_CERT=certs/cert.pem TLS_KEY=certs/key.pem npm start
+```
+
+Then on the phone open `https://<computer-ip>:3000/`, accept the self-signed warning ("Advanced →
+Proceed"), and tap **Share this camera**. **Flip camera** switches front/back mid-stream without
+renegotiating, so the TV does not blink. The TV itself can stay on plain HTTP — only the *sending*
+device needs the certificate.
+
+### Why phone screen mirroring isn't here
+
+No mobile browser implements `getDisplayMedia` — not Chrome on Android, not Safari on iOS. Mirroring
+a phone's screen requires a native app: Android's `MediaProjection` API plus a WebRTC library, or on
+iOS a Broadcast Upload Extension. That is a separate Android/iOS project rather than a change to this
+page. The web app detects the situation and offers the camera instead of failing silently.
+
+---
+
 ## Remote control reference
 
 | Key | Action |
@@ -161,6 +204,9 @@ to diagnose it with.
 | **Text looks soft** | Set **Optimise for → Text & detail**. That pins resolution and drops frames under load instead of blurring. |
 | **"Too many wrong PINs"** | Ten failed attempts from one address triggers a 10-minute block. Wait it out, or restart the server. |
 | **Picture stops when the laptop sleeps** | Expected. Disable sleep on the sender for long sessions. |
+| **Phone: "Share this camera" is greyed out** | The page is not HTTPS. See *Phones and tablets* above. |
+| **Phone: "Share this screen" is greyed out** | Correct — no mobile browser can share its screen. Use the camera. |
+| **Phone: stats stop updating while sharing** | The browser throttles background tabs. The stream keeps running; only the numbers stall. Return to the tab. |
 | **Everything is tiny / cut off at the edges** | The TV is overscanning. Set **Picture → Picture format → Fill screen / Unscaled** in the TV's own menu. |
 
 Live diagnostics: 🔴 Red on the TV shows codec, resolution, fps, bitrate, packet loss, decoder and

@@ -215,9 +215,39 @@ body.pseudo-fs .hud { z-index: 10000; }
 .hidden { display: none !important; }
 .scroll { height: 100%; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 
+/* ------------------------------------------------------------------ *
+ * Phones and tablets. TV-sized padding and type waste a phone screen,
+ * and there is no overscan to protect against.
+ * ------------------------------------------------------------------ */
 @media (max-width: 900px) {
-  h1 { font-size: 1.8rem; }
-  .pin-display { font-size: 2.8rem; }
+  .overscan { padding: 16px 14px; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.25rem; }
+  p { font-size: 1rem; }
+  .pin-display { font-size: 2.4rem; letter-spacing: .16em; padding: 10px 4px 10px 14px; min-height: 68px; }
+  .pin-entry { font-size: 2.4rem; letter-spacing: .2em; min-height: 62px; padding: 8px 0 8px 12px; }
+  .keypad { width: 100%; max-width: 100%; }
+  .keypad button { min-height: 62px; font-size: 1.5rem; }
+  button, .btn { padding: 12px 16px; min-height: 50px; font-size: 1rem; }
+  button.big { font-size: 1.15rem; padding: 18px 20px; min-height: 64px; width: 100%; }
+  .row > * { margin-right: 10px; margin-bottom: 10px; }
+  .grow { min-width: 0; -webkit-flex-basis: 100%; flex-basis: 100%; }
+  .card { padding: 14px 16px; }
+  .hud { left: 10px; right: 10px; bottom: 10px; padding: 10px 12px; }
+  .hud button { padding: 10px 12px; min-height: 46px; font-size: .95rem; }
+  #unmuteBtn { font-size: 1.25rem; padding: 20px 24px; min-height: 72px; }
+  .overlay { padding-top: 15vh; padding-left: 14px; padding-right: 14px; }
+  .stats { font-size: .85rem; }
+  .toast { max-width: 92vw; font-size: 1rem; padding: 12px 18px; }
+}
+
+/* Landscape phone: the picture is everything, shrink the chrome around it. */
+@media (max-height: 480px) and (orientation: landscape) {
+  .overlay { padding-top: 6vh; }
+  .overlay h1 { font-size: 1.3rem; margin-bottom: .2em; }
+  .overlay p { display: none; }
+  #unmuteBtn { min-height: 60px; padding: 14px 22px; }
+  .hud { padding: 8px 10px; }
 }
 </style>
 </head>
@@ -229,8 +259,10 @@ body.pseudo-fs .hud { z-index: 10000; }
   <p>Send this computer&rsquo;s screen to a TV on the same network. Nothing leaves your LAN.</p>
   <div class="row">
     <button id="goSender" class="big primary">Share this screen</button>
-    <button id="goViewer" class="big">Watch on this TV</button>
+    <button id="goCamera" class="big">Share this camera</button>
+    <button id="goViewer" class="big">Watch on this device</button>
   </div>
+  <p id="homeNote" class="muted hidden"></p>
   <p class="muted" style="margin-top:24px">
     On the TV, open <b id="tvUrlHint">http://&lt;this-computer-ip&gt;:3000/tv</b> in the browser.
   </p>
@@ -252,8 +284,11 @@ body.pseudo-fs .hud { z-index: 10000; }
       </p>
       <div class="row" style="margin-top:8px">
         <button id="startShareBtn" class="primary">Start sharing</button>
+        <button id="startCameraBtn">Start camera</button>
+        <button id="flipCameraBtn" class="hidden">Flip camera</button>
         <button id="stopShareBtn" class="danger" disabled>Stop</button>
       </div>
+      <p id="secureNote" class="muted hidden"></p>
     </div>
 
     <div class="grow card">
@@ -337,7 +372,7 @@ body.pseudo-fs .hud { z-index: 10000; }
     <h1 style="margin:0">Enter PIN</h1>
     <span id="joinStatus" class="pill"><span class="dot"></span>Ready</span>
   </div>
-  <p>Type the 6-digit code shown on the computer. The number keys on your remote work here.</p>
+  <p id="joinHelp">Type the 6-digit code shown on the computer. The number keys on your remote work here.</p>
 
   <div class="row">
     <div class="grow" style="max-width:460px">
@@ -351,8 +386,8 @@ body.pseudo-fs .hud { z-index: 10000; }
       </div>
     </div>
     <div class="grow card">
-      <h2>Remote control</h2>
-      <p class="legend">
+      <h2 id="helpTitle">Remote control</h2>
+      <p class="legend" id="helpText">
         <b>Arrows</b> move &middot; <b>OK</b> selects &middot; <b>Back</b> returns<br>
         <b>Red</b> stats &middot; <b>Green</b> fullscreen &middot; <b>Yellow</b> mute &middot; <b>Blue</b> reconnect
       </p>
@@ -851,6 +886,8 @@ body.pseudo-fs .hud { z-index: 10000; }
   var peers = {};          // viewerId -> { pc, stats, label, mdnsOnly }
   var myPin = null;
   var mdnsWarned = false;
+  var shareSource = 'screen';
+  var cameraFacing = 'environment';
 
   function senderSettings() {
     var res = $('resSel').value.split('x');
@@ -866,46 +903,74 @@ body.pseudo-fs .hud { z-index: 10000; }
     };
   }
 
-  function startSharing() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-      toast('Screen capture needs https:// or http://localhost in a desktop browser.', true);
+  /* Both capture paths converge here: 'screen' uses getDisplayMedia (desktop
+   * only), 'camera' uses getUserMedia and is what phones can actually offer,
+   * since no mobile browser exposes display capture. */
+  function startShare(source) {
+    if (!navigator.mediaDevices) { toast(insecureReason(), true); return; }
+    if (source === 'screen' && !navigator.mediaDevices.getDisplayMedia) {
+      toast(isMobile()
+        ? 'Phones cannot share their screen from a browser. Use "Start camera" instead.'
+        : insecureReason(), true);
       return;
     }
+    if (source === 'camera' && !navigator.mediaDevices.getUserMedia) { toast(insecureReason(), true); return; }
+
     var s = senderSettings();
     var videoConstraints = { frameRate: { ideal: s.fps, max: s.fps } };
     if (s.width) {
       videoConstraints.width = { max: s.width };
       videoConstraints.height = { max: s.height };
     }
-
-    var constraints = {
-      video: videoConstraints,
-      audio: {
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-        channelCount: 2,
-        sampleRate: 48000
-      },
-      // Chrome-only hints; unknown members are ignored elsewhere.
-      systemAudio: 'include',
-      selfBrowserSurface: 'exclude',
-      surfaceSwitching: 'include'
+    var audioConstraints = {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      channelCount: 2,
+      sampleRate: 48000
     };
 
-    setPill($('senderStatus'), 'busy', 'Requesting screen');
-    navigator.mediaDevices.getDisplayMedia(constraints).then(function (stream) {
+    var request;
+    if (source === 'camera') {
+      // A camera pointed at a room is motion, not text, whatever the dropdown says.
+      videoConstraints.facingMode = cameraFacing;
+      if (s.width) {
+        videoConstraints.width = { ideal: s.width };
+        videoConstraints.height = { ideal: s.height };
+      }
+      // The mic is the point of a camera share, so let it clean itself up.
+      request = navigator.mediaDevices.getUserMedia({
+        video: videoConstraints,
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      });
+      setPill($('senderStatus'), 'busy', 'Opening camera');
+    } else {
+      request = navigator.mediaDevices.getDisplayMedia({
+        video: videoConstraints,
+        audio: audioConstraints,
+        // Chrome-only hints; unknown members are ignored elsewhere.
+        systemAudio: 'include',
+        selfBrowserSurface: 'exclude',
+        surfaceSwitching: 'include'
+      });
+      setPill($('senderStatus'), 'busy', 'Requesting screen');
+    }
+
+    request.then(function (stream) {
       localStream = stream;
-      applyContentHint(s.hint);
+      shareSource = source;
+      applyContentHint(source === 'camera' ? 'motion' : s.hint);
       attachStream($('localVideo'), stream);
+      $('flipCameraBtn').className = source === 'camera' ? '' : 'hidden';
 
       var vt = stream.getVideoTracks()[0];
       if (vt) {
-        vt.onended = function () { toast('Screen sharing stopped.'); stopSharing(); };
+        vt.onended = function () { toast('Sharing stopped.'); stopSharing(); };
       }
-      if (!stream.getAudioTracks().length) {
+      if (!stream.getAudioTracks().length && source === 'screen') {
         toast('No audio track: tick "Share system audio" in the picker to send sound.');
       }
+      requestWakeLock();
 
       var sock = ensureSocket();
       if (!sock) return;
@@ -915,13 +980,72 @@ body.pseudo-fs .hud { z-index: 10000; }
         text($('pinDisplay'), myPin);
         setPill($('senderStatus'), 'ok', 'Waiting for TV');
         $('startShareBtn').disabled = true;
+        $('startCameraBtn').disabled = true;
         $('stopShareBtn').disabled = false;
         startSenderStatsLoop();
       });
     }, function (err) {
       setPill($('senderStatus'), 'err', 'Capture denied');
-      toast('Screen capture was cancelled or blocked (' + (err && err.name) + ').', true);
+      var name = (err && err.name) || 'error';
+      if (name === 'NotAllowedError' && !window.isSecureContext) toast(insecureReason(), true);
+      else if (name === 'NotFoundError') toast('No camera found on this device.', true);
+      else toast('Capture was cancelled or blocked (' + name + ').', true);
     });
+  }
+
+  /* Swaps the outgoing track in place - replaceTrack avoids renegotiating,
+   * which matters because the TV end is the slow half of this connection. */
+  function flipCamera() {
+    if (shareSource !== 'camera' || !localStream) return;
+    cameraFacing = cameraFacing === 'user' ? 'environment' : 'user';
+    var s = senderSettings();
+    var constraints = { facingMode: cameraFacing, frameRate: { ideal: s.fps, max: s.fps } };
+    if (s.width) { constraints.width = { ideal: s.width }; constraints.height = { ideal: s.height }; }
+
+    navigator.mediaDevices.getUserMedia({ video: constraints, audio: false }).then(function (fresh) {
+      var newTrack = fresh.getVideoTracks()[0];
+      if (!newTrack) return;
+      var old = localStream.getVideoTracks()[0];
+
+      for (var id in peers) {
+        if (!peers.hasOwnProperty(id)) continue;
+        var senders = peers[id].pc.getSenders ? peers[id].pc.getSenders() : [];
+        for (var i = 0; i < senders.length; i++) {
+          if (senders[i].track && senders[i].track.kind === 'video' && senders[i].replaceTrack) {
+            senders[i].replaceTrack(newTrack)['catch'](function () {});
+          }
+        }
+      }
+      if (old) { localStream.removeTrack(old); old.stop(); }
+      localStream.addTrack(newTrack);
+      if ('contentHint' in newTrack) newTrack.contentHint = 'motion';
+      attachStream($('localVideo'), localStream);
+    })['catch'](function () {
+      cameraFacing = cameraFacing === 'user' ? 'environment' : 'user';
+      toast('This device has no second camera.', true);
+    });
+  }
+
+  function insecureReason() {
+    if (window.isSecureContext) return 'Capture is unavailable in this browser.';
+    return 'Camera and screen capture need a secure page. Use http://localhost on this machine, ' +
+           'or start the server with TLS_CERT/TLS_KEY and open it over https://.';
+  }
+
+  function isMobile() {
+    return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+  }
+
+  /* Keeps the phone from sleeping mid-share; absent on TVs and older browsers. */
+  var wakeLock = null;
+  function requestWakeLock() {
+    if (!navigator.wakeLock || !navigator.wakeLock.request) return;
+    navigator.wakeLock.request('screen').then(function (lock) { wakeLock = lock; },
+                                              function () {});
+  }
+  function releaseWakeLock() {
+    if (wakeLock && wakeLock.release) { try { wakeLock.release(); } catch (e) {} }
+    wakeLock = null;
   }
 
   function applyContentHint(hint) {
@@ -945,7 +1069,10 @@ body.pseudo-fs .hud { z-index: 10000; }
     text($('pinDisplay'), '------');
     setPill($('senderStatus'), '', 'Idle');
     $('startShareBtn').disabled = false;
+    $('startCameraBtn').disabled = false;
     $('stopShareBtn').disabled = true;
+    $('flipCameraBtn').className = 'hidden';
+    releaseWakeLock();
     renderViewerList();
     text($('senderStats'), 'Not sharing.');
     stopSenderStatsLoop();
@@ -1240,6 +1367,7 @@ body.pseudo-fs .hud { z-index: 10000; }
       }
       viewerHostId = res.hostId;
       setPill($('joinStatus'), 'ok', 'Joined');
+      requestWakeLock();
       showView('play');
       setPill($('playStatus'), 'busy', 'Waiting for screen');
       $('startOverlay').className = 'overlay';
@@ -1407,10 +1535,21 @@ body.pseudo-fs .hud { z-index: 10000; }
       try {
         var r = req.call(el);
         if (r && typeof r['catch'] === 'function') r['catch'](function () { pseudoFullscreen(); });
+        lockLandscape();
         return;
       } catch (e) { /* falls through to the CSS fallback */ }
     }
     pseudoFullscreen();
+  }
+
+  /* Phones only: a shared desktop is landscape, so rotate to match if allowed.
+   * Rejects harmlessly on desktop and TVs, which have no orientation to lock. */
+  function lockLandscape() {
+    if (!isMobile() || !window.screen || !screen.orientation || !screen.orientation.lock) return;
+    try {
+      var p = screen.orientation.lock('landscape');
+      if (p && typeof p['catch'] === 'function') p['catch'](function () {});
+    } catch (e) {}
   }
 
   function pseudoFullscreen() {
@@ -1507,6 +1646,7 @@ body.pseudo-fs .hud { z-index: 10000; }
   }
 
   function leaveViewer() {
+    releaseWakeLock();
     if (viewerStatsTimer) { clearInterval(viewerStatsTimer); viewerStatsTimer = null; }
     if (viewerPc) { try { viewerPc.close(); } catch (e) {} viewerPc = null; }
     pendingCandidates = [];
@@ -1528,11 +1668,14 @@ body.pseudo-fs .hud { z-index: 10000; }
    * Wiring
    * ================================================================ */
   on($('goSender'), 'click', function () { role = 'host'; showView('sender'); });
+  on($('goCamera'), 'click', function () { role = 'host'; showView('sender'); startShare('camera'); });
   on($('goViewer'), 'click', function () { role = 'viewer'; pinBuffer = ''; renderPin(); showView('join'); });
   on($('senderBack'), 'click', function () { stopSharing(); showView('home'); });
   on($('joinBack'), 'click', function () { showView('home'); });
 
-  on($('startShareBtn'), 'click', startSharing);
+  on($('startShareBtn'), 'click', function () { startShare('screen'); });
+  on($('startCameraBtn'), 'click', function () { startShare('camera'); });
+  on($('flipCameraBtn'), 'click', flipCamera);
   on($('stopShareBtn'), 'click', stopSharing);
   on($('applyBtn'), 'click', function () {
     var s = senderSettings();
@@ -1568,13 +1711,62 @@ body.pseudo-fs .hud { z-index: 10000; }
   on($('fitBtn'), 'click', toggleFit);
   on($('statsBtn'), 'click', toggleStats);
   on($('leaveBtn'), 'click', function () { leaveViewer(); showView('join'); });
-  on($('stage'), 'click', wakeHud);
+  // On a phone there is no focus ring to follow, so tapping the picture is the
+  // only way to get the controls back - make it a toggle, not just a wake.
+  on($('stage'), 'click', function (e) {
+    if (e.target && e.target.tagName === 'BUTTON') return;
+    var hud = $('hud');
+    if (hud.className.indexOf('dim') >= 0) wakeHud();
+    else if (isMobile()) hud.className += ' dim';
+    else wakeHud();
+  });
   on($('remoteVideo'), 'volumechange', updateMuteButton);
 
   window.onbeforeunload = function () {
     if (localStream) stopSharing();
     if (viewerPc) leaveViewer();
   };
+
+  /* Says up front which capture modes this device can actually offer, so a
+   * phone user is not left tapping a button that silently cannot work. */
+  function describeCapture() {
+    var md = navigator.mediaDevices || {};
+    var canScreen = !!md.getDisplayMedia;
+    var canCamera = !!md.getUserMedia;
+    var notes = [];
+
+    $('goSender').disabled = !canScreen;
+    $('goCamera').disabled = !canCamera;
+
+    if (!canScreen && isMobile()) {
+      notes.push('Screen sharing is not available in mobile browsers — no phone browser exposes it. ' +
+                 'You can share this device’s camera, or watch here.');
+    } else if (!canScreen && !window.isSecureContext) {
+      notes.push('Screen sharing needs a secure page. Open http://localhost:' +
+                 (location.port || '3000') + '/share on the computer you want to share.');
+    }
+    if (!canCamera && !window.isSecureContext) {
+      notes.push('Camera sharing needs https:// — start the server with TLS_CERT/TLS_KEY to enable it here.');
+    }
+
+    // Colour keys and a D-pad mean nothing on a phone; say what the hands can do.
+    if (isMobile() || ('ontouchstart' in window && !canScreen)) {
+      text($('helpTitle'), 'Touch controls');
+      $('helpText').innerHTML =
+        '<b>Tap</b> the keypad to enter the PIN<br>' +
+        '<b>Tap the picture</b> to show or hide the controls<br>' +
+        '<b>Fullscreen</b> rotates to landscape where the browser allows it';
+      text($('joinHelp'), 'Type the 6-digit code shown on the computer.');
+      text($('goViewer'), 'Watch on this phone');
+    }
+
+    if (notes.length) {
+      $('homeNote').innerHTML = notes.join('<br>');
+      $('homeNote').className = 'muted';
+      $('secureNote').innerHTML = notes.join('<br>');
+      $('secureNote').className = 'muted';
+    }
+  }
 
   /* ---------------------------------------------------------------- *
    * Boot
@@ -1588,10 +1780,12 @@ body.pseudo-fs .hud { z-index: 10000; }
       return;
     }
 
-    text($('tvUrlHint'), location.protocol + '//' + location.hostname + ':' + location.port + '/tv');
-    text($('lanHint'), location.protocol + '//' + location.hostname + ':' + location.port + '/tv');
+    var base = location.protocol + '//' + location.hostname + (location.port ? ':' + location.port : '');
+    text($('tvUrlHint'), base + '/tv');
+    text($('lanHint'), base + '/tv');
     renderPin();
     updateMuteButton();
+    describeCapture();
 
     var path = location.pathname.toLowerCase();
     var query = location.search;
