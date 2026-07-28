@@ -22,6 +22,7 @@ const { Server } = require('socket.io');
 
 const config = {
   port: Number(process.env.PORT || 3000),
+  httpsPort: Number(process.env.HTTPS_PORT || 3443),
   bindHost: process.env.HOST || '0.0.0.0',
   maxViewersPerRoom: Number(process.env.MAX_VIEWERS || 4),
   // A room with no host and no viewers is dropped immediately; this only caps
@@ -144,17 +145,59 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, rooms: rooms.size, uptime: Math.round(process.uptime()) });
 });
 
+/*
+ * Hands the public certificate to a phone that needs to trust it. Safari will
+ * not grant camera access on a page whose certificate is untrusted - clicking
+ * through the interstitial is not enough - so the cert has to be installed as
+ * a profile first. This serves only the certificate; the private key never
+ * leaves the server.
+ */
+app.get(['/cert', '/cert.crt'], (_req, res) => {
+  if (!tls || !tls.certPath) {
+    res.status(404).type('text/plain').send(
+      'Not running with TLS. Start the server with: npm run start:https'
+    );
+    return;
+  }
+  res.setHeader('Content-Type', 'application/x-x509-ca-cert');
+  res.setHeader('Content-Disposition', 'attachment; filename="tv-screen-share.crt"');
+  res.sendFile(path.resolve(tls.certPath));
+});
+
+// `--https` generates a cert on first run; TLS_CERT/TLS_KEY override it.
+const wantsHttps = process.argv.indexOf('--https') >= 0;
 let server;
+let tls = null;
+
 if (config.tlsCert && config.tlsKey) {
-  server = https.createServer(
-    { cert: fs.readFileSync(config.tlsCert), key: fs.readFileSync(config.tlsKey) },
-    app
-  );
-} else {
-  server = http.createServer(app);
+  tls = { certPath: config.tlsCert, keyPath: config.tlsKey, created: false };
+} else if (wantsHttps) {
+  try {
+    tls = require('./scripts/make-cert').ensureCert();
+    if (tls.created) console.log('  Generated a self-signed certificate in ./certs');
+  } catch (err) {
+    console.error('\n  Could not enable HTTPS:\n  ' + err.message + '\n');
+    process.exit(1);
+  }
 }
 
-const io = new Server(server, {
+/*
+ * Both listeners run at once when TLS is on, sharing one room registry.
+ * The TV stays on plain HTTP - several TV browsers cannot dismiss a
+ * certificate warning at all - while the phone gets the HTTPS origin its
+ * camera requires. It also lets the phone fetch /cert over HTTP first,
+ * with no chicken-and-egg trust problem.
+ */
+server = http.createServer(app);
+let secureServer = null;
+if (tls) {
+  secureServer = https.createServer(
+    { cert: fs.readFileSync(tls.certPath), key: fs.readFileSync(tls.keyPath) },
+    app
+  );
+}
+
+const io = new Server({
   // Websocket first: TV browsers cope badly with long-poll reconnect storms.
   transports: ['websocket', 'polling'],
   pingInterval: 20000,
@@ -162,6 +205,9 @@ const io = new Server(server, {
   maxHttpBufferSize: 256 * 1024,
   cors: { origin: false },
 });
+
+io.attach(server);
+if (secureServer) io.attach(secureServer);
 
 /* ------------------------------------------------------------------ *
  * Signalling
@@ -329,32 +375,51 @@ function lanAddresses() {
   return out;
 }
 
-server.listen(config.port, config.bindHost, () => {
-  const scheme = config.tlsCert && config.tlsKey ? 'https' : 'http';
+function banner() {
   const addresses = lanAddresses();
+  const lan = addresses.length ? addresses[0].address : null;
   console.log('');
   console.log('  TV Screen Share is running');
   console.log('  ─────────────────────────────────────────────');
-  console.log(`  Share from this computer :  ${scheme}://localhost:${config.port}/share`);
-  if (!addresses.length) {
-    console.log('  Open on the TV          :  (no LAN interface detected)');
+  console.log(`  Share this screen  :  http://localhost:${config.port}/share`);
+  if (!lan) {
+    console.log('  Open on the TV     :  (no LAN interface detected)');
   } else {
     addresses.forEach((entry, index) => {
-      const label = index === 0 ? 'Open on the TV          ' : '                        ';
-      console.log(`  ${label}:  ${scheme}://${entry.address}:${config.port}/tv   (${entry.name})`);
+      const label = index === 0 ? 'Open on the TV     ' : '                   ';
+      console.log(`  ${label}:  http://${entry.address}:${config.port}/tv   (${entry.name})`);
     });
   }
-  console.log('  ─────────────────────────────────────────────');
-  if (scheme === 'http') {
-    console.log('  Note: screen capture only works on localhost over http.');
-    console.log('        Set TLS_CERT / TLS_KEY to share from another machine.');
+
+  if (secureServer) {
+    console.log('  ─────────────────────────────────────────────');
+    console.log('  From a phone (camera needs https):');
+    console.log(`    1. install cert :  http://${lan || 'localhost'}:${config.port}/cert`);
+    console.log(`    2. then open    :  https://${lan || 'localhost'}:${config.httpsPort}/`);
+    console.log('  iPhone: after installing, also switch it on under');
+    console.log('          Settings > General > About > Certificate Trust Settings.');
+  } else {
+    console.log('  ─────────────────────────────────────────────');
+    console.log('  Screen capture only works on localhost over http.');
+    console.log('  To share from a phone or another machine: npm run start:https');
   }
   console.log('');
-});
+}
+
+let listening = 0;
+const expected = secureServer ? 2 : 1;
+function ready() {
+  listening += 1;
+  if (listening === expected) banner();
+}
+
+server.listen(config.port, config.bindHost, ready);
+if (secureServer) secureServer.listen(config.httpsPort, config.bindHost, ready);
 
 process.on('SIGINT', () => {
   log('shutting down');
   io.close();
   server.close(() => process.exit(0));
+  if (secureServer) secureServer.close();
   setTimeout(() => process.exit(0), 2000).unref();
 });

@@ -43,16 +43,14 @@ counts as secure; `http://192.168.x.x` does not. So run the server on the machin
 **from** and use the `localhost` URL there. The TV only *receives*, which plain HTTP allows, so the
 TV side needs no certificate.
 
-To share from a *different* machine than the server, give it TLS:
+To share from a *different* machine than the server — or from a phone — start it with TLS instead:
 
 ```bash
-openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
-  -keyout certs/key.pem -out certs/cert.pem -subj "/CN=$(hostname -I | awk '{print $1}')"
-
-TLS_CERT=certs/cert.pem TLS_KEY=certs/key.pem npm start
+npm run start:https
 ```
 
-You will have to accept the self-signed warning on both ends.
+That generates a certificate on first run and listens on **both** HTTP (for the TV) and HTTPS (for
+the sender). See [Phones and tablets](#phones-and-tablets) for the details.
 
 ---
 
@@ -104,7 +102,7 @@ The same page adapts to touch — there is no separate app to install.
 | Mobile use | Works? | Requirement |
 |---|---|---|
 | **Phone/tablet as viewer** | Yes | Plain HTTP is fine |
-| **Phone camera → TV** | Yes | **Needs HTTPS** |
+| **Phone camera → TV** | Yes | HTTPS; on iOS also a trusted certificate |
 | **Mirroring the phone's own screen** | No | Not possible from any mobile browser |
 
 ### Watching on a phone
@@ -115,28 +113,56 @@ it, and the screen is kept awake while you watch.
 
 ### Sending the phone's camera
 
-Useful as a document camera or a second angle. The phone needs a **secure page** — browsers refuse
-camera access on `http://192.168.x.x` — so start the server with TLS:
+Useful as a document camera or a second angle. Phones refuse camera access on `http://192.168.x.x`,
+so run the server over TLS — it generates its own certificate on first use:
 
 ```bash
-mkdir -p certs
-openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
-  -keyout certs/key.pem -out certs/cert.pem -subj "/CN=$(hostname -I | awk '{print $1}')"
-
-TLS_CERT=certs/cert.pem TLS_KEY=certs/key.pem npm start
+npm run start:https
 ```
 
-Then on the phone open `https://<computer-ip>:3000/`, accept the self-signed warning ("Advanced →
-Proceed"), and tap **Share this camera**. **Flip camera** switches front/back mid-stream without
-renegotiating, so the TV does not blink. The TV itself can stay on plain HTTP — only the *sending*
-device needs the certificate.
+This runs **both** listeners at once, sharing one set of rooms:
+
+| Listener | Port | For |
+|---|---|---|
+| HTTP | 3000 | the TV, and the certificate download |
+| HTTPS | 3443 | the phone that is sending its camera |
+
+The split is deliberate. The TV stays on plain HTTP because several TV browsers cannot dismiss a
+certificate warning at all, while the phone gets the HTTPS origin its camera requires.
+
+The certificate is generated on first run and covers `localhost` plus every LAN address the machine
+has, listed under `subjectAltName`. That last part matters: browsers ignore a certificate's Common
+Name entirely, so a cert with only a CN is rejected outright.
+
+Then open `https://<computer-ip>:3443/` on the phone and tap **Share this camera**. **Flip camera**
+switches front/back mid-stream using `replaceTrack`, so the TV never renegotiates.
+
+#### iPhone and iPad: trust the certificate first
+
+Safari refuses `getUserMedia` on a page whose certificate is untrusted, and **tapping through the
+warning is not enough** — the camera stays blocked with no visible error. Install it once:
+
+1. On the iPhone, open **`http://<computer-ip>:3000/cert`** — plain HTTP, so there is no warning to
+   fight through. The server sends the certificate only; the private key never leaves the machine.
+2. Safari says a profile was downloaded. Go to **Settings → General → VPN & Device Management**, tap
+   the *TV Screen Share* profile, and **Install**.
+3. Then — a separate step, easy to miss — go to **Settings → General → About → Certificate Trust
+   Settings** and switch the profile **on**.
+4. Open `https://<computer-ip>:3443/` and tap **Share this camera**.
+
+Skip step 3 and Safari still shows a certificate warning, with the camera silently staying off.
 
 ### Why phone screen mirroring isn't here
 
 No mobile browser implements `getDisplayMedia` — not Chrome on Android, not Safari on iOS. Mirroring
-a phone's screen requires a native app: Android's `MediaProjection` API plus a WebRTC library, or on
-iOS a Broadcast Upload Extension. That is a separate Android/iOS project rather than a change to this
-page. The web app detects the situation and offers the camera instead of failing silently.
+a phone's screen needs a native app: Android's `MediaProjection`, or on iOS a ReplayKit Broadcast
+Upload Extension. That is a separate app project, not a change to this page. The web app detects the
+situation and offers the camera instead of failing silently.
+
+**For an iPhone, try AirPlay before building anything.** Most Philips sets from roughly 2019 onward
+ship AirPlay 2 — check *Settings → Apps* or the TV's feature list for an AirPlay entry. If it is
+there, iOS **Control Centre → Screen Mirroring** already does full phone-screen mirroring, with
+audio, at better quality than a custom app would manage. It costs nothing to check.
 
 ---
 
@@ -226,7 +252,8 @@ Environment variables, all optional:
 | `MAX_VIEWERS` | `4` | Concurrent TVs per share |
 | `JOIN_FAIL_MAX` | `10` | Wrong PINs before an address is blocked |
 | `JOIN_FAIL_WINDOW_MS` | `600000` | Block window, ms |
-| `TLS_CERT` / `TLS_KEY` | – | Serve HTTPS instead of HTTP |
+| `HTTPS_PORT` | `3443` | HTTPS port when started with `--https` |
+| `TLS_CERT` / `TLS_KEY` | – | Use your own certificate instead of a generated one |
 | `STUN_URL` | – | STUN server; unnecessary on a LAN |
 | `TURN_URL` / `TURN_USERNAME` / `TURN_CREDENTIAL` | – | TURN relay, for segmented networks |
 
