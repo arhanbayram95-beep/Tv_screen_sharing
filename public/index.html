@@ -1,0 +1,1617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#05070c">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%231d6fe0'/%3E%3Crect x='3' y='4' width='10' height='7' rx='1' fill='%23fff'/%3E%3C/svg%3E">
+<title>TV Screen Share</title>
+<style>
+/* ------------------------------------------------------------------ *
+ * No CSS custom properties, no grid, no flex `gap`: older Philips
+ * (Saphi / Titan OS) browser engines silently drop those and the layout
+ * collapses on the one screen you cannot debug from the couch.
+ * ------------------------------------------------------------------ */
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #05070c;
+  color: #eef2f8;
+  font-family: "Segoe UI", Roboto, Arial, Helvetica, sans-serif;
+  overflow: hidden;
+  -webkit-text-size-adjust: 100%;
+}
+* { box-sizing: border-box; }
+
+/* TV overscan: many sets crop 2-4% of the panel edge. */
+.overscan { padding: 4vh 4vw; }
+
+.view { display: none; height: 100%; width: 100%; }
+.view.active { display: block; }
+
+h1 { font-size: 2.4rem; margin: 0 0 .4em 0; letter-spacing: .02em; }
+h2 { font-size: 1.6rem; margin: 0 0 .6em 0; font-weight: 600; }
+p  { font-size: 1.05rem; line-height: 1.5; color: #b9c4d4; margin: 0 0 1em 0; }
+.muted { color: #7f8da3; font-size: .95rem; }
+
+.row { display: -webkit-box; display: -webkit-flex; display: flex; -webkit-flex-wrap: wrap; flex-wrap: wrap; }
+.row > * { margin-right: 14px; margin-bottom: 14px; }
+.spread { -webkit-justify-content: space-between; justify-content: space-between; -webkit-align-items: center; align-items: center; }
+.grow { -webkit-flex: 1 1 320px; flex: 1 1 320px; min-width: 300px; }
+
+.card {
+  background: #0d1220;
+  border: 1px solid #1e2942;
+  border-radius: 14px;
+  padding: 20px 22px;
+}
+
+/* --- controls: everything reachable by D-pad must be a real button/input --- */
+button, .btn {
+  font: inherit;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #eef2f8;
+  background: #1a2540;
+  border: 2px solid #2c3c63;
+  border-radius: 12px;
+  padding: 14px 22px;
+  cursor: pointer;
+  min-height: 56px;
+  text-align: center;
+  -webkit-tap-highlight-color: transparent;
+}
+button:hover { background: #223055; }
+button[disabled] { opacity: .4; cursor: default; }
+button.primary { background: #1d6fe0; border-color: #3d8bf5; }
+button.primary:hover { background: #2a7ef0; }
+button.danger { background: #7a1f2c; border-color: #b8394b; }
+button.ghost { background: transparent; }
+button.big { font-size: 1.5rem; padding: 26px 34px; min-height: 84px; }
+
+/* The focus ring is the entire navigation affordance on a remote control. */
+button:focus, input:focus, [tabindex]:focus, .focusable:focus {
+  outline: none;
+  border-color: #ffd166;
+  box-shadow: 0 0 0 5px rgba(255, 209, 102, .55);
+  background: #2a3a63;
+}
+button.primary:focus { background: #2f86ff; }
+
+input[type="text"], input[type="number"], input[type="password"] {
+  font: inherit;
+  font-size: 1.1rem;
+  color: #eef2f8;
+  background: #060a14;
+  border: 2px solid #2c3c63;
+  border-radius: 10px;
+  padding: 12px 14px;
+  min-height: 52px;
+  width: 100%;
+}
+label { display: block; font-size: .95rem; color: #9fb0c8; margin-bottom: 6px; }
+.field { margin-bottom: 16px; }
+select { font: inherit; font-size: 1.05rem; color: #eef2f8; background: #1a2540; border: 2px solid #2c3c63; border-radius: 10px; padding: 12px; min-height: 52px; }
+.check { display: -webkit-box; display: flex; -webkit-align-items: center; align-items: center; }
+.check input { width: 26px; height: 26px; margin-right: 12px; }
+
+/* --- status pill --- */
+.pill {
+  display: inline-block;
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: .95rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  background: #26324c;
+  color: #9fb0c8;
+  white-space: nowrap;
+}
+.pill.ok      { background: #12432a; color: #6ee7a0; }
+.pill.warn    { background: #4a3a10; color: #ffd166; }
+.pill.err     { background: #4a1520; color: #ff8fa3; }
+.pill.busy    { background: #14304f; color: #7cc0ff; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: currentColor; margin-right: 8px; vertical-align: middle; }
+
+/* --- PIN --- */
+.pin-display {
+  font-family: "Courier New", monospace;
+  font-size: 4.2rem;
+  font-weight: 700;
+  letter-spacing: .22em;
+  color: #ffd166;
+  background: #060a14;
+  border: 2px dashed #3a4a72;
+  border-radius: 14px;
+  padding: 14px 10px 14px 24px;
+  text-align: center;
+  min-height: 96px;
+}
+.pin-entry {
+  font-family: "Courier New", monospace;
+  font-size: 3.4rem;
+  letter-spacing: .3em;
+  text-align: center;
+  color: #ffd166;
+  min-height: 84px;
+  padding: 10px 0 10px 20px;
+  background: #060a14;
+  border: 2px solid #2c3c63;
+  border-radius: 14px;
+}
+.keypad { width: 420px; max-width: 92vw; }
+.keypad button {
+  width: 30%;
+  margin: 1.5%;
+  font-size: 1.9rem;
+  min-height: 78px;
+  float: left;
+}
+.keypad:after { content: ""; display: block; clear: both; }
+
+/* --- viewer stage --- */
+#stage { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #000; }
+#remoteVideo { width: 100%; height: 100%; background: #000; display: block; }
+#remoteVideo.fit-contain { -o-object-fit: contain; object-fit: contain; }
+#remoteVideo.fit-cover   { -o-object-fit: cover; object-fit: cover; }
+
+.overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(3, 6, 12, .88);
+  text-align: center;
+  padding-top: 12vh;
+}
+.overlay.hidden { display: none; }
+#unmuteBtn { font-size: 2.1rem; padding: 34px 56px; min-height: 110px; }
+
+.hud {
+  position: absolute;
+  left: 4vw; right: 4vw; bottom: 4vh;
+  background: rgba(6, 10, 20, .82);
+  border: 1px solid #22304d;
+  border-radius: 14px;
+  padding: 14px 18px;
+  -webkit-transition: opacity .25s linear;
+  transition: opacity .25s linear;
+}
+.hud.dim { opacity: 0; }
+.hud-top { position: absolute; left: 4vw; right: 4vw; top: 4vh; bottom: auto; }
+
+/* Pseudo-fullscreen: the Fullscreen API is missing on several TV browsers,
+   so we fall back to painting the video over the whole document. */
+body.pseudo-fs #stage { position: fixed; z-index: 9999; }
+body.pseudo-fs .hud { z-index: 10000; }
+
+.stats { font-family: "Courier New", monospace; font-size: 1rem; color: #9fb0c8; line-height: 1.7; }
+.stats b { color: #eef2f8; font-weight: 600; }
+.stats.hidden { display: none; }
+
+.viewer-item { border-bottom: 1px solid #1e2942; padding: 10px 0; font-size: 1rem; }
+.viewer-item:last-child { border-bottom: none; }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 6vh;
+  -webkit-transform: translateX(-50%);
+  transform: translateX(-50%);
+  background: #1a2540;
+  border: 2px solid #3a4a72;
+  border-radius: 12px;
+  padding: 16px 26px;
+  font-size: 1.1rem;
+  max-width: 80vw;
+  z-index: 20000;
+  display: none;
+}
+.toast.show { display: block; }
+.toast.err { border-color: #b8394b; background: #3a1620; }
+
+.legend { font-size: .95rem; color: #7f8da3; }
+.legend b { color: #ffd166; }
+.hidden { display: none !important; }
+.scroll { height: 100%; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+
+@media (max-width: 900px) {
+  h1 { font-size: 1.8rem; }
+  .pin-display { font-size: 2.8rem; }
+}
+</style>
+</head>
+<body>
+
+<!-- ============================== HOME ============================== -->
+<div id="view-home" class="view active scroll overscan">
+  <h1>TV Screen Share</h1>
+  <p>Send this computer&rsquo;s screen to a TV on the same network. Nothing leaves your LAN.</p>
+  <div class="row">
+    <button id="goSender" class="big primary">Share this screen</button>
+    <button id="goViewer" class="big">Watch on this TV</button>
+  </div>
+  <p class="muted" style="margin-top:24px">
+    On the TV, open <b id="tvUrlHint">http://&lt;this-computer-ip&gt;:3000/tv</b> in the browser.
+  </p>
+</div>
+
+<!-- ============================= SENDER ============================= -->
+<div id="view-sender" class="view scroll overscan">
+  <div class="row spread">
+    <h1 style="margin:0">Sharing</h1>
+    <span id="senderStatus" class="pill"><span class="dot"></span>Idle</span>
+  </div>
+
+  <div class="row" style="margin-top:18px">
+    <div class="grow card">
+      <h2>1. Enter this PIN on the TV</h2>
+      <div id="pinDisplay" class="pin-display">------</div>
+      <p class="muted" style="margin-top:12px">
+        TV address: <b id="lanHint">http://&lt;ip&gt;:3000/tv</b>
+      </p>
+      <div class="row" style="margin-top:8px">
+        <button id="startShareBtn" class="primary">Start sharing</button>
+        <button id="stopShareBtn" class="danger" disabled>Stop</button>
+      </div>
+    </div>
+
+    <div class="grow card">
+      <h2>Preview</h2>
+      <video id="localVideo" autoplay muted playsinline
+             style="width:100%;background:#000;border-radius:10px;max-height:300px"></video>
+      <div id="senderStats" class="stats" style="margin-top:12px">Not sharing.</div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:4px">
+    <div class="grow card">
+      <h2>Quality</h2>
+      <div class="field">
+        <label for="resSel">Resolution cap (TV decoders top out at 1080p)</label>
+        <select id="resSel">
+          <option value="1280x720">720p &mdash; safest on old TVs</option>
+          <option value="1920x1080" selected>1080p</option>
+          <option value="0x0">Native (no cap)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="fpsSel">Frame rate</label>
+        <select id="fpsSel">
+          <option value="15">15 fps &mdash; documents / code</option>
+          <option value="30" selected>30 fps</option>
+          <option value="60">60 fps &mdash; needs a strong TV</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="brSel">Max bitrate</label>
+        <select id="brSel">
+          <option value="2500">2.5 Mbps</option>
+          <option value="6000" selected>6 Mbps</option>
+          <option value="12000">12 Mbps &mdash; wired only</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="hintSel">Optimise for</label>
+        <select id="hintSel">
+          <option value="detail" selected>Text &amp; detail (sharp, lower fps)</option>
+          <option value="motion">Motion &amp; video (smooth, softer)</option>
+        </select>
+      </div>
+      <button id="applyBtn">Apply</button>
+    </div>
+
+    <div class="grow card">
+      <h2>TV compatibility</h2>
+      <div class="field check">
+        <input type="checkbox" id="strictH264" checked>
+        <label for="strictH264" style="margin:0">Force H.264 only (strip VP8/VP9/AV1)</label>
+      </div>
+      <div class="field check">
+        <input type="checkbox" id="stripMdns">
+        <label for="stripMdns" style="margin:0">Strip <code>.local</code> mDNS ICE candidates</label>
+      </div>
+      <div class="field check">
+        <input type="checkbox" id="stereoAudio" checked>
+        <label for="stereoAudio" style="margin:0">Stereo system audio (Opus 128&nbsp;kbps)</label>
+      </div>
+      <p class="muted" id="compatNote">
+        H.264 is the only video codec Philips Saphi / Titan OS panels reliably decode in hardware.
+      </p>
+    </div>
+
+    <div class="grow card">
+      <h2>Connected TVs (<span id="viewerCount">0</span>)</h2>
+      <div id="viewerList" class="muted">No one has joined yet.</div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:10px">
+    <button id="senderBack" class="ghost">&larr; Back</button>
+  </div>
+</div>
+
+<!-- ======================== VIEWER: PIN ENTRY ======================== -->
+<div id="view-join" class="view scroll overscan">
+  <div class="row spread">
+    <h1 style="margin:0">Enter PIN</h1>
+    <span id="joinStatus" class="pill"><span class="dot"></span>Ready</span>
+  </div>
+  <p>Type the 6-digit code shown on the computer. The number keys on your remote work here.</p>
+
+  <div class="row">
+    <div class="grow" style="max-width:460px">
+      <div id="pinEntry" class="pin-entry">______</div>
+      <div class="keypad" style="margin-top:16px">
+        <button data-key="1">1</button><button data-key="2">2</button><button data-key="3">3</button>
+        <button data-key="4">4</button><button data-key="5">5</button><button data-key="6">6</button>
+        <button data-key="7">7</button><button data-key="8">8</button><button data-key="9">9</button>
+        <button data-key="del">&#9003;</button><button data-key="0">0</button>
+        <button data-key="ok" class="primary">OK</button>
+      </div>
+    </div>
+    <div class="grow card">
+      <h2>Remote control</h2>
+      <p class="legend">
+        <b>Arrows</b> move &middot; <b>OK</b> selects &middot; <b>Back</b> returns<br>
+        <b>Red</b> stats &middot; <b>Green</b> fullscreen &middot; <b>Yellow</b> mute &middot; <b>Blue</b> reconnect
+      </p>
+      <button id="joinBack" class="ghost" style="margin-top:10px">&larr; Back</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========================= VIEWER: PLAYBACK ======================== -->
+<div id="view-play" class="view">
+  <div id="stage">
+    <video id="remoteVideo" class="fit-contain" autoplay muted playsinline webkit-playsinline x5-playsinline></video>
+
+    <div id="startOverlay" class="overlay">
+      <h1 id="overlayTitle">Press OK to start</h1>
+      <p id="overlayText">TV browsers block sound until you press a button. This also starts playback.</p>
+      <button id="unmuteBtn" class="primary">&#128266;&nbsp; OK &mdash; Play with sound</button>
+      <div style="margin-top:22px">
+        <button id="silentBtn" class="ghost">Watch without sound</button>
+      </div>
+    </div>
+
+    <div id="hud" class="hud">
+      <div class="row spread" style="margin:0">
+        <span id="playStatus" class="pill busy"><span class="dot"></span>Connecting</span>
+        <div class="row" style="margin:0">
+          <button id="muteBtn">&#128263; Unmute</button>
+          <button id="fsBtn">&#9974; Fullscreen</button>
+          <button id="fitBtn">&#8690; Fit</button>
+          <button id="statsBtn">&#8505; Stats</button>
+          <button id="leaveBtn" class="danger">&#10005; Leave</button>
+        </div>
+      </div>
+      <div id="viewerStats" class="stats hidden" style="margin-top:10px"></div>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+/* eslint-disable */
+/*
+ * Written in ES5 on purpose: the viewer half of this file has to parse on
+ * whatever Blink/Presto hybrid ships in a Philips TV. One arrow function in an
+ * unrelated branch is a blank screen with no console to read it from.
+ */
+(function () {
+  'use strict';
+
+  /* ---------------------------------------------------------------- *
+   * DOM + tiny helpers
+   * ---------------------------------------------------------------- */
+  function $(id) { return document.getElementById(id); }
+  function on(el, ev, fn) { if (el) el.addEventListener(ev, fn, false); }
+  function text(el, s) { if (el) el.textContent = s; }
+
+  var toastTimer = null;
+  function toast(msg, isError) {
+    var el = $('toast');
+    el.textContent = msg;
+    el.className = 'toast show' + (isError ? ' err' : '');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.className = 'toast'; }, 4500);
+  }
+
+  function setPill(el, cls, label) {
+    if (!el) return;
+    el.className = 'pill ' + cls;
+    el.innerHTML = '<span class="dot"></span>' + label;
+  }
+
+  function showView(name) {
+    var views = document.querySelectorAll('.view');
+    for (var i = 0; i < views.length; i++) views[i].className = views[i].className.replace(' active', '');
+    var target = $('view-' + name);
+    if (target) target.className += ' active';
+    currentView = name;
+    setTimeout(function () { focusFirst(target); }, 30);
+  }
+
+  var currentView = 'home';
+
+  function fmtKbps(v) {
+    if (v == null) return '-';
+    if (v >= 1000) return (v / 1000).toFixed(1) + ' Mbps';
+    return Math.round(v) + ' kbps';
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Spatial navigation for the D-pad
+   *
+   * TV browsers either lack spatial navigation or apply it to DOM order,
+   * which walks sideways through a keypad. We resolve direction against
+   * on-screen geometry instead.
+   * ---------------------------------------------------------------- */
+  function focusableItems() {
+    var nodes = document.querySelectorAll('button, input, select, [tabindex]');
+    var out = [];
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      if (n.disabled) continue;
+      if (n.getAttribute('tabindex') === '-1') continue;
+      var r = n.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      if (r.bottom < 0 || r.top > window.innerHeight) continue;
+      out.push({ el: n, r: r });
+    }
+    return out;
+  }
+
+  function focusFirst(container) {
+    var scope = container || document;
+    var nodes = scope.querySelectorAll('button, input, select');
+    for (var i = 0; i < nodes.length; i++) {
+      var r = nodes[i].getBoundingClientRect();
+      if (!nodes[i].disabled && r.width && r.height) { nodes[i].focus(); return; }
+    }
+  }
+
+  function moveFocus(dir) {
+    var items = focusableItems();
+    if (!items.length) return;
+    var cur = document.activeElement;
+    if (!cur || cur === document.body || cur.tagName === 'HTML') { items[0].el.focus(); return; }
+
+    var cr = cur.getBoundingClientRect();
+    var cx = cr.left + cr.width / 2;
+    var cy = cr.top + cr.height / 2;
+    var best = null;
+    var bestScore = Infinity;
+
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].el === cur) continue;
+      var r = items[i].r;
+      var x = r.left + r.width / 2;
+      var y = r.top + r.height / 2;
+      var dx = x - cx;
+      var dy = y - cy;
+      var along, across;
+
+      if (dir === 'left')       { if (dx > -6) continue; along = -dx; across = Math.abs(dy); }
+      else if (dir === 'right') { if (dx < 6)  continue; along =  dx; across = Math.abs(dy); }
+      else if (dir === 'up')    { if (dy > -6) continue; along = -dy; across = Math.abs(dx); }
+      else                      { if (dy < 6)  continue; along =  dy; across = Math.abs(dx); }
+
+      // Weight sideways drift heavily so focus stays in its column/row.
+      var score = along + across * 2.5;
+      if (score < bestScore) { bestScore = score; best = items[i].el; }
+    }
+    if (best) {
+      best.focus();
+      if (best.scrollIntoView) {
+        try { best.scrollIntoView({ block: 'nearest' }); } catch (e) { best.scrollIntoView(false); }
+      }
+    }
+  }
+
+  /* Key codes across desktop, HbbTV, Tizen and Android TV remotes. */
+  var KEY = {
+    LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40,
+    ENTER: 13, SPACE: 32,
+    BACKSPACE: 8, ESC: 27,
+    RED: 403, GREEN: 404, YELLOW: 405, BLUE: 406,
+    BACK_HBB: 461, BACK_TIZEN: 10009, BACK_BROWSER: 166,
+    PLAY_PAUSE: 179, PLAY: 415, STOP: 413
+  };
+
+  document.addEventListener('keydown', function (e) {
+    var k = e.keyCode || e.which;
+    var tag = (document.activeElement && document.activeElement.tagName) || '';
+    var typing = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
+
+    if (k === KEY.LEFT || k === KEY.UP || k === KEY.RIGHT || k === KEY.DOWN) {
+      if (typing && tag === 'SELECT') return;
+      e.preventDefault();
+      moveFocus(k === KEY.LEFT ? 'left' : k === KEY.RIGHT ? 'right' : k === KEY.UP ? 'up' : 'down');
+      wakeHud();
+      return;
+    }
+
+    if (k === KEY.ENTER || k === KEY.SPACE) {
+      wakeHud();
+      // Buttons already fire click on Enter; only nudge the ones that do not.
+      if (currentView === 'play' && !$('startOverlay').className.match(/hidden/)) {
+        e.preventDefault();
+        startPlayback(true);
+      }
+      return;
+    }
+
+    if (k === KEY.ESC || k === KEY.BACK_HBB || k === KEY.BACK_TIZEN || k === KEY.BACK_BROWSER ||
+        (k === KEY.BACKSPACE && !typing)) {
+      e.preventDefault();
+      handleBack();
+      return;
+    }
+
+    // Numeric keys drive PIN entry straight from the remote's number pad.
+    if (currentView === 'join') {
+      var digit = -1;
+      if (k >= 48 && k <= 57) digit = k - 48;
+      else if (k >= 96 && k <= 105) digit = k - 96;
+      if (digit >= 0) { e.preventDefault(); pinPush(String(digit)); return; }
+    }
+
+    if (currentView === 'play') {
+      wakeHud();
+      if (k === KEY.RED) { e.preventDefault(); toggleStats(); }
+      else if (k === KEY.GREEN) { e.preventDefault(); toggleFullscreen(); }
+      else if (k === KEY.YELLOW) { e.preventDefault(); toggleMute(); }
+      else if (k === KEY.BLUE) { e.preventDefault(); reconnectViewer(); }
+      else if (k === KEY.PLAY || k === KEY.PLAY_PAUSE) { e.preventDefault(); startPlayback(false); }
+      // Desktop-friendly aliases so this is testable without a remote.
+      else if (e.key === 'f') toggleFullscreen();
+      else if (e.key === 'm') toggleMute();
+      else if (e.key === 's') toggleStats();
+    }
+  }, false);
+
+  function handleBack() {
+    if (currentView === 'play') { leaveViewer(); showView('join'); }
+    else if (currentView === 'join') { showView('home'); }
+    else if (currentView === 'sender') { stopSharing(); showView('home'); }
+  }
+
+  /* ---------------------------------------------------------------- *
+   * SDP surgery
+   *
+   * setCodecPreferences is the supported path and is used whenever the
+   * browser has it. These helpers cover the rest: bandwidth ceilings,
+   * stereo Opus, and the codec filter on engines too old for the API.
+   * ---------------------------------------------------------------- */
+  function splitSdp(sdp) { return sdp.split(/\r\n|\r|\n/); }
+
+  function sectionBounds(lines, media) {
+    var start = -1, i;
+    for (i = 0; i < lines.length; i++) {
+      if (lines[i].indexOf('m=' + media) === 0) { start = i; break; }
+    }
+    if (start < 0) return null;
+    var end = lines.length;
+    for (i = start + 1; i < lines.length; i++) {
+      if (lines[i].indexOf('m=') === 0) { end = i; break; }
+    }
+    return { start: start, end: end };
+  }
+
+  function h264Rank(fmtpValue) {
+    var f = fmtpValue || '';
+    var score = 0;
+    if (/packetization-mode=1/.test(f)) score += 2;
+    var m = /profile-level-id=([0-9a-fA-F]{6})/.exec(f);
+    var profile = m ? m[1].toLowerCase() : '';
+    if (profile.indexOf('42e0') === 0) score += 8;      // constrained baseline: broadest TV support
+    else if (profile.indexOf('4200') === 0) score += 6; // baseline
+    else if (profile.indexOf('4d') === 0) score += 3;   // main
+    else if (profile.indexOf('64') === 0) score += 1;   // high: many panels decode it in software
+    return score;
+  }
+
+  function sdpPreferH264(sdp, strict) {
+    var lines = splitSdp(sdp);
+    var bounds = sectionBounds(lines, 'video');
+    if (!bounds) return sdp;
+
+    var rtpmap = {}, fmtp = {}, apt = {}, i, m;
+    for (i = bounds.start + 1; i < bounds.end; i++) {
+      m = /^a=rtpmap:(\d+)\s+([^/]+)\//.exec(lines[i]);
+      if (m) { rtpmap[m[1]] = m[2].toLowerCase(); continue; }
+      m = /^a=fmtp:(\d+)\s+(.*)$/.exec(lines[i]);
+      if (m) {
+        fmtp[m[1]] = m[2];
+        var a = /apt=(\d+)/.exec(m[2]);
+        if (a) apt[m[1]] = a[1];
+      }
+    }
+
+    var mParts = lines[bounds.start].split(' ');
+    var payloads = mParts.slice(3);
+    var h264 = [], rest = [];
+    for (i = 0; i < payloads.length; i++) {
+      if (rtpmap[payloads[i]] === 'h264') h264.push(payloads[i]);
+      else rest.push(payloads[i]);
+    }
+    if (!h264.length) return sdp; // Nothing to force; leave the offer intact.
+
+    h264.sort(function (a, b) { return h264Rank(fmtp[b]) - h264Rank(fmtp[a]); });
+
+    var ordered = [];
+    for (i = 0; i < h264.length; i++) {
+      ordered.push(h264[i]);
+      for (var j = 0; j < rest.length; j++) {
+        if (apt[rest[j]] === h264[i] && ordered.indexOf(rest[j]) < 0) ordered.push(rest[j]);
+      }
+    }
+    if (!strict) {
+      for (i = 0; i < rest.length; i++) if (ordered.indexOf(rest[i]) < 0) ordered.push(rest[i]);
+    }
+
+    var dropped = {};
+    for (i = 0; i < payloads.length; i++) if (ordered.indexOf(payloads[i]) < 0) dropped[payloads[i]] = true;
+
+    var out = [];
+    for (i = 0; i < lines.length; i++) {
+      if (i === bounds.start) {
+        out.push(mParts.slice(0, 3).concat(ordered).join(' '));
+        continue;
+      }
+      if (i > bounds.start && i < bounds.end) {
+        m = /^a=(?:rtpmap|fmtp|rtcp-fb):(\d+)/.exec(lines[i]);
+        if (m && dropped[m[1]]) continue;
+      }
+      out.push(lines[i]);
+    }
+    return out.join('\r\n');
+  }
+
+  function sdpSetBitrate(sdp, media, kbps) {
+    if (!kbps) return sdp;
+    var lines = splitSdp(sdp);
+    var bounds = sectionBounds(lines, media);
+    if (!bounds) return sdp;
+
+    var out = [], inserted = false, i;
+    for (i = 0; i < lines.length; i++) {
+      if (i > bounds.start && i < bounds.end &&
+          (lines[i].indexOf('b=AS:') === 0 || lines[i].indexOf('b=TIAS:') === 0)) continue;
+      out.push(lines[i]);
+      // SDP ordering: b= must sit directly after the section's c= line.
+      if (!inserted && i > bounds.start && i < bounds.end && lines[i].indexOf('c=') === 0) {
+        out.push('b=AS:' + kbps);
+        inserted = true;
+      }
+    }
+    return out.join('\r\n');
+  }
+
+  function sdpStereoOpus(sdp) {
+    var lines = splitSdp(sdp);
+    var bounds = sectionBounds(lines, 'audio');
+    if (!bounds) return sdp;
+
+    var pt = null, i, m;
+    for (i = bounds.start + 1; i < bounds.end; i++) {
+      m = /^a=rtpmap:(\d+)\s+opus\//i.exec(lines[i]);
+      if (m) { pt = m[1]; break; }
+    }
+    if (!pt) return sdp;
+
+    var wanted = 'stereo=1;sprop-stereo=1;maxaveragebitrate=128000';
+    var out = [], patched = false;
+    for (i = 0; i < lines.length; i++) {
+      if (i > bounds.start && i < bounds.end && lines[i].indexOf('a=fmtp:' + pt + ' ') === 0) {
+        var body = lines[i].substring(('a=fmtp:' + pt + ' ').length);
+        body = body.replace(/;?\s*(stereo|sprop-stereo|maxaveragebitrate)=[^;]*/g, '');
+        body = body.replace(/^;+|;+$/g, '');
+        out.push('a=fmtp:' + pt + ' ' + (body ? body + ';' : '') + wanted);
+        patched = true;
+        continue;
+      }
+      out.push(lines[i]);
+    }
+    if (!patched) {
+      var extra = [];
+      for (i = 0; i < out.length; i++) {
+        extra.push(out[i]);
+        if (i === bounds.end - 1) extra.push('a=fmtp:' + pt + ' ' + wanted);
+      }
+      out = extra;
+    }
+    return out.join('\r\n');
+  }
+
+  /* ---------------------------------------------------------------- *
+   * WebRTC compatibility shims
+   * ---------------------------------------------------------------- */
+  var PeerConnection = window.RTCPeerConnection || window.webkitRTCPeerConnection ||
+                       window.mozRTCPeerConnection;
+  var SessionDescription = window.RTCSessionDescription || window.mozRTCSessionDescription;
+  var IceCandidate = window.RTCIceCandidate || window.mozRTCIceCandidate;
+
+  /* Old engines expose the callback form of these methods only. */
+  function pcOp(pc, method, arg) {
+    return new Promise(function (resolve, reject) {
+      var result;
+      try {
+        result = arg === undefined ? pc[method]() : pc[method](arg);
+      } catch (err) { reject(err); return; }
+
+      if (result && typeof result.then === 'function') { result.then(resolve, reject); return; }
+      try {
+        if (arg === undefined) pc[method](resolve, reject);
+        else pc[method](arg, resolve, reject);
+      } catch (err2) { reject(err2); }
+    });
+  }
+
+  function attachStream(video, stream) {
+    try {
+      video.srcObject = stream;
+    } catch (e) {
+      try {
+        video.src = (window.URL || window.webkitURL).createObjectURL(stream);
+      } catch (e2) {
+        toast('This browser cannot attach the video stream.', true);
+      }
+    }
+  }
+
+  function getStatsSafe(pc) {
+    return new Promise(function (resolve) {
+      if (!pc || !pc.getStats) { resolve(null); return; }
+      var r;
+      try { r = pc.getStats(); } catch (e) { resolve(null); return; }
+      if (r && typeof r.then === 'function') r.then(resolve, function () { resolve(null); });
+      else resolve(null);
+    });
+  }
+
+  function eachStat(report, fn) {
+    if (!report) return;
+    if (typeof report.forEach === 'function') { report.forEach(fn); return; }
+    for (var key in report) if (Object.prototype.hasOwnProperty.call(report, key)) fn(report[key], key);
+  }
+
+  function codecName(report, codecId) {
+    var name = null;
+    eachStat(report, function (s) {
+      if (s && s.type === 'codec' && s.id === codecId && s.mimeType) {
+        name = s.mimeType.replace(/^video\//i, '').replace(/^audio\//i, '');
+      }
+    });
+    return name;
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Socket + ICE config
+   * ---------------------------------------------------------------- */
+  var socket = null;
+  var iceServers = [];
+
+  function loadIceConfig(done) {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/api/ice', true);
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+      if (xhr.status === 200) {
+        try { iceServers = JSON.parse(xhr.responseText).iceServers || []; } catch (e) { iceServers = []; }
+      }
+      done();
+    };
+    try { xhr.send(); } catch (e) { done(); }
+  }
+
+  function pcConfig() {
+    return {
+      iceServers: iceServers,
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require',
+      iceCandidatePoolSize: 0
+    };
+  }
+
+  function ensureSocket() {
+    if (socket) return socket;
+    if (typeof io !== 'function') {
+      toast('Cannot reach the server (socket.io failed to load).', true);
+      return null;
+    }
+    socket = io({ transports: ['websocket', 'polling'], reconnectionDelay: 1000, reconnectionDelayMax: 5000 });
+    socket.on('connect_error', function () { toast('Signalling connection lost. Retrying...', true); });
+    socket.on('signal', function (msg) { routeSignal(msg); });
+    socket.on('viewer:joined', function (msg) { senderOnViewerJoined(msg); });
+    socket.on('viewer:left', function (msg) { senderOnViewerLeft(msg); });
+    socket.on('room:closed', function (msg) { viewerOnRoomClosed(msg); });
+    return socket;
+  }
+
+  function sendSignal(to, data) {
+    if (socket) socket.emit('signal', { to: to, data: data });
+  }
+
+  function routeSignal(msg) {
+    if (role === 'host') senderOnSignal(msg);
+    else viewerOnSignal(msg);
+  }
+
+  var role = null;
+
+  /* ================================================================ *
+   * SENDER
+   * ================================================================ */
+  var localStream = null;
+  var peers = {};          // viewerId -> { pc, stats, label, mdnsOnly }
+  var myPin = null;
+  var mdnsWarned = false;
+
+  function senderSettings() {
+    var res = $('resSel').value.split('x');
+    return {
+      width: Number(res[0]) || 0,
+      height: Number(res[1]) || 0,
+      fps: Number($('fpsSel').value),
+      kbps: Number($('brSel').value),
+      hint: $('hintSel').value,
+      strictH264: $('strictH264').checked,
+      stripMdns: $('stripMdns').checked,
+      stereo: $('stereoAudio').checked
+    };
+  }
+
+  function startSharing() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      toast('Screen capture needs https:// or http://localhost in a desktop browser.', true);
+      return;
+    }
+    var s = senderSettings();
+    var videoConstraints = { frameRate: { ideal: s.fps, max: s.fps } };
+    if (s.width) {
+      videoConstraints.width = { max: s.width };
+      videoConstraints.height = { max: s.height };
+    }
+
+    var constraints = {
+      video: videoConstraints,
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: 2,
+        sampleRate: 48000
+      },
+      // Chrome-only hints; unknown members are ignored elsewhere.
+      systemAudio: 'include',
+      selfBrowserSurface: 'exclude',
+      surfaceSwitching: 'include'
+    };
+
+    setPill($('senderStatus'), 'busy', 'Requesting screen');
+    navigator.mediaDevices.getDisplayMedia(constraints).then(function (stream) {
+      localStream = stream;
+      applyContentHint(s.hint);
+      attachStream($('localVideo'), stream);
+
+      var vt = stream.getVideoTracks()[0];
+      if (vt) {
+        vt.onended = function () { toast('Screen sharing stopped.'); stopSharing(); };
+      }
+      if (!stream.getAudioTracks().length) {
+        toast('No audio track: tick "Share system audio" in the picker to send sound.');
+      }
+
+      var sock = ensureSocket();
+      if (!sock) return;
+      sock.emit('host:create', { title: document.title }, function (res) {
+        if (!res || !res.ok) { toast('Could not open a room: ' + ((res && res.error) || 'unknown'), true); stopSharing(); return; }
+        myPin = res.pin;
+        text($('pinDisplay'), myPin);
+        setPill($('senderStatus'), 'ok', 'Waiting for TV');
+        $('startShareBtn').disabled = true;
+        $('stopShareBtn').disabled = false;
+        startSenderStatsLoop();
+      });
+    }, function (err) {
+      setPill($('senderStatus'), 'err', 'Capture denied');
+      toast('Screen capture was cancelled or blocked (' + (err && err.name) + ').', true);
+    });
+  }
+
+  function applyContentHint(hint) {
+    if (!localStream) return;
+    var tracks = localStream.getVideoTracks();
+    for (var i = 0; i < tracks.length; i++) {
+      if ('contentHint' in tracks[i]) tracks[i].contentHint = hint;
+    }
+  }
+
+  function stopSharing() {
+    for (var id in peers) if (peers.hasOwnProperty(id)) closePeer(id);
+    peers = {};
+    if (localStream) {
+      var tracks = localStream.getTracks();
+      for (var i = 0; i < tracks.length; i++) tracks[i].stop();
+      localStream = null;
+    }
+    if (socket) socket.emit('host:stop');
+    myPin = null;
+    text($('pinDisplay'), '------');
+    setPill($('senderStatus'), '', 'Idle');
+    $('startShareBtn').disabled = false;
+    $('stopShareBtn').disabled = true;
+    renderViewerList();
+    text($('senderStats'), 'Not sharing.');
+    stopSenderStatsLoop();
+  }
+
+  function closePeer(viewerId) {
+    var entry = peers[viewerId];
+    if (!entry) return;
+    try { entry.pc.close(); } catch (e) {}
+    delete peers[viewerId];
+  }
+
+  /* Prefer H.264 via the supported API; SDP munging is the fallback below. */
+  function applyCodecPreferences(pc, strict) {
+    if (!window.RTCRtpSender || !RTCRtpSender.getCapabilities || !pc.getTransceivers) return false;
+    var caps;
+    try { caps = RTCRtpSender.getCapabilities('video'); } catch (e) { return false; }
+    if (!caps || !caps.codecs) return false;
+
+    var h264 = [], helpers = [], others = [];
+    for (var i = 0; i < caps.codecs.length; i++) {
+      var c = caps.codecs[i];
+      var mt = String(c.mimeType || '').toLowerCase();
+      if (mt === 'video/h264') h264.push(c);
+      else if (mt === 'video/rtx' || mt === 'video/red' || mt === 'video/ulpfec') helpers.push(c);
+      else others.push(c);
+    }
+    if (!h264.length) {
+      toast('This browser cannot encode H.264; the TV may not be able to decode the stream.', true);
+      return false;
+    }
+    h264.sort(function (a, b) { return h264Rank(b.sdpFmtpLine) - h264Rank(a.sdpFmtpLine); });
+
+    var ordered = strict ? h264.concat(helpers) : h264.concat(helpers, others);
+    var applied = false;
+    var transceivers = pc.getTransceivers();
+    for (var t = 0; t < transceivers.length; t++) {
+      var tr = transceivers[t];
+      var kind = (tr.sender && tr.sender.track && tr.sender.track.kind) ||
+                 (tr.receiver && tr.receiver.track && tr.receiver.track.kind);
+      if (kind !== 'video' || !tr.setCodecPreferences) continue;
+      try { tr.setCodecPreferences(ordered); applied = true; } catch (e) {}
+    }
+    return applied;
+  }
+
+  function applyEncodingParams(pc, s) {
+    if (!pc.getSenders) return;
+    var senders = pc.getSenders();
+    for (var i = 0; i < senders.length; i++) {
+      var sender = senders[i];
+      if (!sender.track || sender.track.kind !== 'video' || !sender.getParameters) continue;
+      var params;
+      try { params = sender.getParameters(); } catch (e) { continue; }
+      if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+      params.encodings[0].maxBitrate = s.kbps * 1000;
+      params.encodings[0].maxFramerate = s.fps;
+      // Text stays readable when the encoder drops frames instead of resolution.
+      params.degradationPreference = s.hint === 'detail' ? 'maintain-resolution' : 'maintain-framerate';
+      try { sender.setParameters(params); } catch (e) {}
+    }
+  }
+
+  function senderOnViewerJoined(msg) {
+    if (!localStream) return;
+    var s = senderSettings();
+    var pc = new PeerConnection(pcConfig());
+    peers[msg.viewerId] = { pc: pc, label: msg.label || msg.ip || 'TV', stats: null, mdnsOnly: true, prev: null };
+
+    var tracks = localStream.getTracks();
+    for (var i = 0; i < tracks.length; i++) {
+      if (pc.addTrack) pc.addTrack(tracks[i], localStream);
+      else if (pc.addStream) { pc.addStream(localStream); break; }
+    }
+
+    if (pc.getTransceivers) {
+      var trs = pc.getTransceivers();
+      for (var t = 0; t < trs.length; t++) {
+        try { trs[t].direction = 'sendonly'; } catch (e) {}
+      }
+    }
+
+    var codecApiWorked = applyCodecPreferences(pc, s.strictH264);
+
+    pc.onicecandidate = function (e) {
+      if (!e.candidate) return;
+      var line = e.candidate.candidate || '';
+      if (line.indexOf('.local') >= 0) {
+        if (s.stripMdns) return;
+      } else if (line) {
+        var entry = peers[msg.viewerId];
+        if (entry) entry.mdnsOnly = false;
+      }
+      sendSignal(msg.viewerId, { kind: 'candidate', candidate: e.candidate });
+    };
+
+    pc.onicegatheringstatechange = function () {
+      if (pc.iceGatheringState !== 'complete') return;
+      var entry = peers[msg.viewerId];
+      if (entry && entry.mdnsOnly && !s.stripMdns && !mdnsWarned) {
+        mdnsWarned = true;
+        toast('Only mDNS (.local) addresses were offered. If the TV never connects, tick "Strip .local candidates".');
+      }
+    };
+
+    pc.oniceconnectionstatechange = function () { updateSenderStatus(); };
+    if ('onconnectionstatechange' in pc) pc.onconnectionstatechange = function () { updateSenderStatus(); };
+
+    pcOp(pc, 'createOffer').then(function (offer) {
+      var sdp = offer.sdp;
+      if (!codecApiWorked) sdp = sdpPreferH264(sdp, s.strictH264);
+      sdp = sdpSetBitrate(sdp, 'video', s.kbps);
+      if (s.stereo) sdp = sdpStereoOpus(sdp);
+
+      var munged = new SessionDescription({ type: 'offer', sdp: sdp });
+      return pcOp(pc, 'setLocalDescription', munged)['catch'](function () {
+        // Some Chrome builds reject any edited local SDP; fall back to the original.
+        return pcOp(pc, 'setLocalDescription', offer);
+      });
+    }).then(function () {
+      applyEncodingParams(pc, s);
+      sendSignal(msg.viewerId, { kind: 'offer', sdp: pc.localDescription.sdp, type: pc.localDescription.type });
+      renderViewerList();
+    })['catch'](function (err) {
+      toast('Could not create the offer: ' + err, true);
+    });
+
+    renderViewerList();
+  }
+
+  function senderOnViewerLeft(msg) {
+    closePeer(msg.viewerId);
+    renderViewerList();
+    updateSenderStatus();
+  }
+
+  function senderOnSignal(msg) {
+    var entry = peers[msg.from];
+    if (!entry) return;
+    var data = msg.data;
+
+    if (data.kind === 'answer') {
+      pcOp(entry.pc, 'setRemoteDescription', new SessionDescription({ type: 'answer', sdp: data.sdp }))
+        ['catch'](function (err) { toast('Answer rejected: ' + err, true); });
+    } else if (data.kind === 'candidate' && data.candidate) {
+      try {
+        pcOp(entry.pc, 'addIceCandidate', new IceCandidate(data.candidate))['catch'](function () {});
+      } catch (e) {}
+    } else if (data.kind === 'stats') {
+      entry.stats = data;
+      renderViewerList();
+    }
+  }
+
+  function updateSenderStatus() {
+    var total = 0, connected = 0;
+    for (var id in peers) {
+      if (!peers.hasOwnProperty(id)) continue;
+      total++;
+      var st = peers[id].pc.connectionState || peers[id].pc.iceConnectionState;
+      if (st === 'connected' || st === 'completed') connected++;
+    }
+    if (!localStream) setPill($('senderStatus'), '', 'Idle');
+    else if (!total) setPill($('senderStatus'), 'ok', 'Waiting for TV');
+    else if (connected) setPill($('senderStatus'), 'ok', 'Live to ' + connected + ' TV' + (connected > 1 ? 's' : ''));
+    else setPill($('senderStatus'), 'busy', 'Connecting');
+  }
+
+  function renderViewerList() {
+    var ids = [];
+    for (var id in peers) if (peers.hasOwnProperty(id)) ids.push(id);
+    text($('viewerCount'), String(ids.length));
+
+    var host = $('viewerList');
+    if (!ids.length) {
+      host.className = 'muted';
+      host.innerHTML = 'No one has joined yet.';
+      return;
+    }
+    host.className = '';
+    var html = '';
+    for (var i = 0; i < ids.length; i++) {
+      var entry = peers[ids[i]];
+      var state = entry.pc.connectionState || entry.pc.iceConnectionState || 'new';
+      var line = '<div class="viewer-item"><b>' + escapeHtml(entry.label) + '</b> &mdash; ' + state;
+      if (entry.stats) {
+        line += '<br><span class="muted">decoding ' + escapeHtml(entry.stats.codec || '?') +
+                ' &middot; ' + escapeHtml(entry.stats.res || '?') +
+                ' @ ' + escapeHtml(String(entry.stats.fps || '?')) + ' fps' +
+                ' &middot; ' + escapeHtml(String(entry.stats.kbpsLabel || '')) + '</span>';
+      }
+      html += line + '</div>';
+    }
+    host.innerHTML = html;
+    updateSenderStatus();
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  var senderStatsTimer = null;
+  function startSenderStatsLoop() {
+    stopSenderStatsLoop();
+    // Prime a baseline immediately so the first rendered bitrate is a number
+    // rather than a dash.
+    senderStatsTick();
+    senderStatsTimer = setInterval(senderStatsTick, 2000);
+  }
+
+  function senderStatsTick() {
+    (function () {
+      var ids = [];
+      for (var id in peers) if (peers.hasOwnProperty(id)) ids.push(id);
+      if (!ids.length) { text($('senderStats'), 'Waiting for a TV to join.'); return; }
+
+      var entry = peers[ids[0]];
+      getStatsSafe(entry.pc).then(function (report) {
+        if (!report) { text($('senderStats'), 'Stats unavailable.'); return; }
+        var out = null, pair = null;
+        eachStat(report, function (s) {
+          if (s.type === 'outbound-rtp' && (s.kind === 'video' || s.mediaType === 'video') && !s.isRemote) out = s;
+          if (s.type === 'candidate-pair' && (s.nominated || s.selected) && s.state === 'succeeded') pair = s;
+        });
+        if (!out) { text($('senderStats'), 'Negotiating...'); return; }
+
+        var kbps = null;
+        var now = Date.now();
+        if (entry.prev && out.bytesSent != null) {
+          var dt = (now - entry.prev.t) / 1000;
+          if (dt > 0) kbps = ((out.bytesSent - entry.prev.bytes) * 8) / 1000 / dt;
+        }
+        entry.prev = { t: now, bytes: out.bytesSent || 0 };
+
+        var lines = [];
+        lines.push('codec <b>' + escapeHtml(codecName(report, out.codecId) || 'negotiating') + '</b>');
+        lines.push('sending <b>' + (out.frameWidth || '?') + '&times;' + (out.frameHeight || '?') +
+                   ' @ ' + Math.round(out.framesPerSecond || 0) + ' fps</b>');
+        lines.push('bitrate <b>' + fmtKbps(kbps) + '</b>');
+        if (out.encoderImplementation) lines.push('encoder <b>' + escapeHtml(out.encoderImplementation) + '</b>');
+        if (pair && pair.currentRoundTripTime != null) {
+          lines.push('rtt <b>' + Math.round(pair.currentRoundTripTime * 1000) + ' ms</b>');
+        }
+        $('senderStats').innerHTML = lines.join('<br>');
+      });
+    })();
+  }
+  function stopSenderStatsLoop() {
+    if (senderStatsTimer) { clearInterval(senderStatsTimer); senderStatsTimer = null; }
+  }
+
+  /* ================================================================ *
+   * VIEWER
+   * ================================================================ */
+  var viewerPc = null;
+  var viewerHostId = null;
+  var pinBuffer = '';
+  var lastPin = '';
+  var viewerPrev = null;
+  var viewerStatsTimer = null;
+  var pendingCandidates = [];
+
+  function pinPush(ch) {
+    if (pinBuffer.length >= 6) return;
+    pinBuffer += ch;
+    renderPin();
+    if (pinBuffer.length === 6) setTimeout(joinRoom, 150);
+  }
+  function pinPop() { pinBuffer = pinBuffer.slice(0, -1); renderPin(); }
+  function renderPin() {
+    var shown = pinBuffer;
+    while (shown.length < 6) shown += '_';
+    text($('pinEntry'), shown);
+  }
+
+  function joinRoom() {
+    if (pinBuffer.length !== 6) { toast('Enter all 6 digits.', true); return; }
+    var sock = ensureSocket();
+    if (!sock) return;
+    role = 'viewer';
+    lastPin = pinBuffer;
+    setPill($('joinStatus'), 'busy', 'Connecting');
+
+    sock.emit('viewer:join', { pin: pinBuffer, label: 'TV browser' }, function (res) {
+      if (!res || !res.ok) {
+        setPill($('joinStatus'), 'err', 'Rejected');
+        toast(joinErrorText(res && res.error), true);
+        pinBuffer = '';
+        renderPin();
+        return;
+      }
+      viewerHostId = res.hostId;
+      setPill($('joinStatus'), 'ok', 'Joined');
+      showView('play');
+      setPill($('playStatus'), 'busy', 'Waiting for screen');
+      $('startOverlay').className = 'overlay';
+      setTimeout(function () { $('unmuteBtn').focus(); }, 60);
+      startViewerStatsLoop();
+    });
+  }
+
+  function joinErrorText(code) {
+    if (code === 'no-such-room') return 'No screen is being shared with that PIN.';
+    if (code === 'bad-pin') return 'PIN must be 6 digits.';
+    if (code === 'room-full') return 'That screen already has the maximum number of viewers.';
+    if (code === 'too-many-attempts') return 'Too many wrong PINs. Wait a few minutes and try again.';
+    return 'Could not join (' + (code || 'unknown') + ').';
+  }
+
+  function viewerOnSignal(msg) {
+    var data = msg.data;
+    if (data.kind === 'offer') {
+      handleOffer(msg.from, data.sdp);
+    } else if (data.kind === 'candidate' && data.candidate) {
+      if (!viewerPc || !viewerPc.remoteDescription) { pendingCandidates.push(data.candidate); return; }
+      try {
+        pcOp(viewerPc, 'addIceCandidate', new IceCandidate(data.candidate))['catch'](function () {});
+      } catch (e) {}
+    }
+  }
+
+  function handleOffer(from, sdp) {
+    viewerHostId = from;
+    if (viewerPc) { try { viewerPc.close(); } catch (e) {} }
+    viewerPc = new PeerConnection(pcConfig());
+    viewerPrev = null;
+
+    viewerPc.onicecandidate = function (e) {
+      if (e.candidate) sendSignal(viewerHostId, { kind: 'candidate', candidate: e.candidate });
+    };
+    viewerPc.oniceconnectionstatechange = function () { updateViewerStatus(); };
+    if ('onconnectionstatechange' in viewerPc) {
+      viewerPc.onconnectionstatechange = function () { updateViewerStatus(); };
+    }
+
+    function useStream(stream) {
+      attachStream($('remoteVideo'), stream);
+      setPill($('playStatus'), 'ok', 'Receiving');
+      // Muted autoplay is the only kind most TV browsers allow unprompted.
+      var p = $('remoteVideo').play();
+      if (p && typeof p['catch'] === 'function') p['catch'](function () {});
+    }
+
+    if ('ontrack' in viewerPc) {
+      viewerPc.ontrack = function (e) {
+        var stream = (e.streams && e.streams[0]) || null;
+        if (!stream && window.MediaStream) { stream = new MediaStream([e.track]); }
+        if (stream) useStream(stream);
+      };
+    } else {
+      viewerPc.onaddstream = function (e) { useStream(e.stream); };
+    }
+
+    pcOp(viewerPc, 'setRemoteDescription', new SessionDescription({ type: 'offer', sdp: sdp }))
+      .then(function () {
+        preferH264OnReceiver(viewerPc);
+        for (var i = 0; i < pendingCandidates.length; i++) {
+          try { pcOp(viewerPc, 'addIceCandidate', new IceCandidate(pendingCandidates[i]))['catch'](function () {}); } catch (e) {}
+        }
+        pendingCandidates = [];
+        return pcOp(viewerPc, 'createAnswer');
+      })
+      .then(function (answer) {
+        return pcOp(viewerPc, 'setLocalDescription', answer).then(function () { return answer; });
+      })
+      .then(function (answer) {
+        var local = viewerPc.localDescription || answer;
+        sendSignal(viewerHostId, { kind: 'answer', sdp: local.sdp });
+      })['catch'](function (err) {
+        setPill($('playStatus'), 'err', 'Failed');
+        toast('Could not accept the stream: ' + err, true);
+      });
+  }
+
+  function preferH264OnReceiver(pc) {
+    if (!window.RTCRtpReceiver || !RTCRtpReceiver.getCapabilities || !pc.getTransceivers) return;
+    var caps;
+    try { caps = RTCRtpReceiver.getCapabilities('video'); } catch (e) { return; }
+    if (!caps || !caps.codecs) return;
+
+    var h264 = [], rest = [];
+    for (var i = 0; i < caps.codecs.length; i++) {
+      var mt = String(caps.codecs[i].mimeType || '').toLowerCase();
+      if (mt === 'video/h264') h264.push(caps.codecs[i]);
+      else rest.push(caps.codecs[i]);
+    }
+    if (!h264.length) return;
+    h264.sort(function (a, b) { return h264Rank(b.sdpFmtpLine) - h264Rank(a.sdpFmtpLine); });
+
+    var trs = pc.getTransceivers();
+    for (var t = 0; t < trs.length; t++) {
+      var kind = (trs[t].receiver && trs[t].receiver.track && trs[t].receiver.track.kind);
+      if (kind !== 'video' || !trs[t].setCodecPreferences) continue;
+      try { trs[t].setCodecPreferences(h264.concat(rest)); } catch (e) {}
+    }
+  }
+
+  function updateViewerStatus() {
+    if (!viewerPc) return;
+    var st = viewerPc.connectionState || viewerPc.iceConnectionState;
+    if (st === 'connected' || st === 'completed') setPill($('playStatus'), 'ok', 'Connected');
+    else if (st === 'checking' || st === 'new' || st === 'connecting') setPill($('playStatus'), 'busy', 'Connecting');
+    else if (st === 'disconnected') setPill($('playStatus'), 'warn', 'Interrupted');
+    else if (st === 'failed' || st === 'closed') setPill($('playStatus'), 'err', 'Disconnected');
+  }
+
+  /* Autoplay-with-sound is blocked until a real key press reaches the page. */
+  function startPlayback(withSound) {
+    var v = $('remoteVideo');
+    if (withSound) v.muted = false;
+    var p = v.play();
+    if (p && typeof p['catch'] === 'function') {
+      p['catch'](function () {
+        v.muted = true;
+        var again = v.play();
+        if (again && typeof again['catch'] === 'function') again['catch'](function () {});
+        toast('The TV refused sound on this stream; playing muted.', true);
+      });
+    }
+    $('startOverlay').className = 'overlay hidden';
+    updateMuteButton();
+    wakeHud();
+    setTimeout(function () { $('fsBtn').focus(); }, 60);
+  }
+
+  function toggleMute() {
+    var v = $('remoteVideo');
+    v.muted = !v.muted;
+    if (!v.muted) {
+      var p = v.play();
+      if (p && typeof p['catch'] === 'function') p['catch'](function () { v.muted = true; updateMuteButton(); });
+    }
+    updateMuteButton();
+  }
+
+  function updateMuteButton() {
+    var v = $('remoteVideo');
+    $('muteBtn').innerHTML = v.muted ? '🔇 Unmute' : '🔊 Mute';
+  }
+
+  function fullscreenElement() {
+    return document.fullscreenElement || document.webkitFullscreenElement ||
+           document.mozFullScreenElement || document.msFullscreenElement || null;
+  }
+
+  function toggleFullscreen() {
+    var el = $('stage');
+    if (fullscreenElement()) {
+      var exit = document.exitFullscreen || document.webkitExitFullscreen ||
+                 document.mozCancelFullScreen || document.msExitFullscreen;
+      if (exit) { try { exit.call(document); } catch (e) {} }
+      document.body.className = document.body.className.replace(/\s*pseudo-fs/g, '');
+      return;
+    }
+    var req = el.requestFullscreen || el.webkitRequestFullscreen ||
+              el.mozRequestFullScreen || el.msRequestFullscreen;
+    if (req) {
+      try {
+        var r = req.call(el);
+        if (r && typeof r['catch'] === 'function') r['catch'](function () { pseudoFullscreen(); });
+        return;
+      } catch (e) { /* falls through to the CSS fallback */ }
+    }
+    pseudoFullscreen();
+  }
+
+  function pseudoFullscreen() {
+    if (document.body.className.indexOf('pseudo-fs') >= 0) {
+      document.body.className = document.body.className.replace(/\s*pseudo-fs/g, '');
+    } else {
+      document.body.className += ' pseudo-fs';
+    }
+  }
+
+  function toggleFit() {
+    var v = $('remoteVideo');
+    var cover = v.className.indexOf('fit-cover') >= 0;
+    v.className = cover ? 'fit-contain' : 'fit-cover';
+    toast(cover ? 'Fit: whole screen visible' : 'Fit: fill panel (edges cropped)');
+  }
+
+  function toggleStats() {
+    var el = $('viewerStats');
+    el.className = el.className.indexOf('hidden') >= 0 ? 'stats' : 'stats hidden';
+  }
+
+  var hudTimer = null;
+  function wakeHud() {
+    if (currentView !== 'play') return;
+    var hud = $('hud');
+    hud.className = hud.className.replace(/\s*dim/g, '');
+    if (hudTimer) clearTimeout(hudTimer);
+    hudTimer = setTimeout(function () {
+      if ($('startOverlay').className.indexOf('hidden') >= 0) hud.className += ' dim';
+    }, 6000);
+  }
+
+  function startViewerStatsLoop() {
+    if (viewerStatsTimer) clearInterval(viewerStatsTimer);
+    // A 1s priming sample gives the HUD a real bitrate on its first paint.
+    setTimeout(viewerStatsTick, 1000);
+    viewerStatsTimer = setInterval(viewerStatsTick, 3000);
+  }
+
+  function viewerStatsTick() {
+    (function () {
+      if (!viewerPc) return;
+      getStatsSafe(viewerPc).then(function (report) {
+        if (!report) { $('viewerStats').innerHTML = 'Stats unavailable on this browser.'; return; }
+        var vin = null, ain = null, pair = null;
+        eachStat(report, function (s) {
+          if (s.type === 'inbound-rtp' && (s.kind === 'video' || s.mediaType === 'video')) vin = s;
+          if (s.type === 'inbound-rtp' && (s.kind === 'audio' || s.mediaType === 'audio')) ain = s;
+          if (s.type === 'candidate-pair' && (s.nominated || s.selected) && s.state === 'succeeded') pair = s;
+        });
+        if (!vin) return;
+
+        var kbps = null, now = Date.now();
+        if (viewerPrev && vin.bytesReceived != null) {
+          var dt = (now - viewerPrev.t) / 1000;
+          if (dt > 0) kbps = ((vin.bytesReceived - viewerPrev.bytes) * 8) / 1000 / dt;
+        }
+        viewerPrev = { t: now, bytes: vin.bytesReceived || 0 };
+
+        var codec = codecName(report, vin.codecId) || '?';
+        var res = (vin.frameWidth || '?') + 'x' + (vin.frameHeight || '?');
+        var fps = Math.round(vin.framesPerSecond || 0);
+
+        var lines = [];
+        lines.push('video <b>' + escapeHtml(codec) + '</b> ' + escapeHtml(res) + ' @ ' + fps + ' fps');
+        lines.push('bitrate <b>' + fmtKbps(kbps) + '</b>' +
+                   (vin.packetsLost != null ? ' &middot; lost <b>' + vin.packetsLost + '</b>' : ''));
+        if (vin.decoderImplementation) lines.push('decoder <b>' + escapeHtml(vin.decoderImplementation) + '</b>');
+        if (ain) lines.push('audio <b>' + escapeHtml(codecName(report, ain.codecId) || '?') + '</b>' +
+                            ($('remoteVideo').muted ? ' (muted)' : ''));
+        if (pair && pair.currentRoundTripTime != null) {
+          lines.push('rtt <b>' + Math.round(pair.currentRoundTripTime * 1000) + ' ms</b>');
+        }
+        $('viewerStats').innerHTML = lines.join('<br>');
+
+        // Mirror the numbers back to the sender: nobody can read the TV's HUD
+        // from the machine that is doing the sharing.
+        if (viewerHostId) {
+          sendSignal(viewerHostId, {
+            kind: 'stats', codec: codec, res: res, fps: fps, kbpsLabel: fmtKbps(kbps)
+          });
+        }
+      });
+    })();
+  }
+
+  function reconnectViewer() {
+    toast('Reconnecting...');
+    leaveViewer();
+    pinBuffer = lastPin;
+    renderPin();
+    joinRoom();
+  }
+
+  function leaveViewer() {
+    if (viewerStatsTimer) { clearInterval(viewerStatsTimer); viewerStatsTimer = null; }
+    if (viewerPc) { try { viewerPc.close(); } catch (e) {} viewerPc = null; }
+    pendingCandidates = [];
+    var v = $('remoteVideo');
+    try { v.srcObject = null; } catch (e) { v.removeAttribute('src'); }
+    if (socket) { socket.disconnect(); socket = null; }
+    $('startOverlay').className = 'overlay';
+  }
+
+  function viewerOnRoomClosed(msg) {
+    setPill($('playStatus'), 'err', 'Ended');
+    var reason = msg && msg.reason;
+    toast(reason === 'kicked' ? 'The host removed this TV.' : 'The host stopped sharing.', true);
+    leaveViewer();
+    setTimeout(function () { showView('join'); pinBuffer = ''; renderPin(); }, 1200);
+  }
+
+  /* ================================================================ *
+   * Wiring
+   * ================================================================ */
+  on($('goSender'), 'click', function () { role = 'host'; showView('sender'); });
+  on($('goViewer'), 'click', function () { role = 'viewer'; pinBuffer = ''; renderPin(); showView('join'); });
+  on($('senderBack'), 'click', function () { stopSharing(); showView('home'); });
+  on($('joinBack'), 'click', function () { showView('home'); });
+
+  on($('startShareBtn'), 'click', startSharing);
+  on($('stopShareBtn'), 'click', stopSharing);
+  on($('applyBtn'), 'click', function () {
+    var s = senderSettings();
+    applyContentHint(s.hint);
+    if (localStream) {
+      var vt = localStream.getVideoTracks()[0];
+      if (vt && vt.applyConstraints) {
+        var c = { frameRate: { ideal: s.fps, max: s.fps } };
+        if (s.width) { c.width = { max: s.width }; c.height = { max: s.height }; }
+        vt.applyConstraints(c)['catch'](function () {});
+      }
+    }
+    for (var id in peers) if (peers.hasOwnProperty(id)) applyEncodingParams(peers[id].pc, s);
+    toast('Applied. Codec changes need a restart of the share.');
+  });
+
+  var keypad = document.querySelectorAll('.keypad button');
+  for (var k = 0; k < keypad.length; k++) {
+    (function (btn) {
+      on(btn, 'click', function () {
+        var key = btn.getAttribute('data-key');
+        if (key === 'del') pinPop();
+        else if (key === 'ok') joinRoom();
+        else pinPush(key);
+      });
+    })(keypad[k]);
+  }
+
+  on($('unmuteBtn'), 'click', function () { startPlayback(true); });
+  on($('silentBtn'), 'click', function () { startPlayback(false); });
+  on($('muteBtn'), 'click', toggleMute);
+  on($('fsBtn'), 'click', toggleFullscreen);
+  on($('fitBtn'), 'click', toggleFit);
+  on($('statsBtn'), 'click', toggleStats);
+  on($('leaveBtn'), 'click', function () { leaveViewer(); showView('join'); });
+  on($('stage'), 'click', wakeHud);
+  on($('remoteVideo'), 'volumechange', updateMuteButton);
+
+  window.onbeforeunload = function () {
+    if (localStream) stopSharing();
+    if (viewerPc) leaveViewer();
+  };
+
+  /* ---------------------------------------------------------------- *
+   * Boot
+   * ---------------------------------------------------------------- */
+  (function boot() {
+    if (!window.Promise || !PeerConnection) {
+      document.body.innerHTML =
+        '<div class="overscan"><h1>Unsupported browser</h1>' +
+        '<p>This browser has no WebRTC support. On Android TV install Chrome, TV Bro or Puffin TV ' +
+        'and open this page there.</p></div>';
+      return;
+    }
+
+    text($('tvUrlHint'), location.protocol + '//' + location.hostname + ':' + location.port + '/tv');
+    text($('lanHint'), location.protocol + '//' + location.hostname + ':' + location.port + '/tv');
+    renderPin();
+    updateMuteButton();
+
+    var path = location.pathname.toLowerCase();
+    var query = location.search;
+    var pinMatch = /[?&]pin=(\d{6})/.exec(query);
+
+    loadIceConfig(function () {
+      if (path.indexOf('/tv') === 0 || path.indexOf('/viewer') === 0 || path.indexOf('/watch') === 0 ||
+          /[?&]role=viewer/.test(query)) {
+        role = 'viewer';
+        showView('join');
+        if (pinMatch) { pinBuffer = pinMatch[1]; renderPin(); setTimeout(joinRoom, 400); }
+      } else if (path.indexOf('/share') === 0 || path.indexOf('/sender') === 0 || path.indexOf('/host') === 0) {
+        role = 'host';
+        showView('sender');
+      } else {
+        showView('home');
+      }
+    });
+  })();
+})();
+</script>
+</body>
+</html>

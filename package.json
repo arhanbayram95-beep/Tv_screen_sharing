@@ -1,0 +1,20 @@
+{
+  "name": "tv-screen-share",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local-network screen sharing from a laptop to a Philips Smart TV browser over WebRTC (H.264 forced).",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "check": "node --check server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  },
+  "license": "MIT"
+}
