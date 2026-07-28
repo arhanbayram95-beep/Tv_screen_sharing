@@ -208,7 +208,8 @@ if (tls) {
 
 const io = new Server({
   // Websocket first: TV browsers cope badly with long-poll reconnect storms.
-  transports: ['websocket', 'polling'],
+  // Order here is only an allow-list; the client decides what it tries first.
+  transports: ['polling', 'websocket'],
   pingInterval: 20000,
   pingTimeout: 25000,
   maxHttpBufferSize: 256 * 1024,
@@ -217,6 +218,13 @@ const io = new Server({
 
 io.attach(server);
 if (secureServer) io.attach(secureServer);
+
+/* A TV that cannot complete the handshake has no console to look at, so
+ * surface the reason on the machine the user is actually sitting at. */
+io.engine.on('connection_error', (err) => {
+  log('signalling handshake failed:', err.code, '-', err.message,
+    err.req && err.req.url ? '(' + err.req.url.split('?')[0] + ')' : '');
+});
 
 /* ------------------------------------------------------------------ *
  * Signalling

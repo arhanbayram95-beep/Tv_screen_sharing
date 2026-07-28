@@ -830,6 +830,19 @@ body.pseudo-fs .hud { z-index: 10000; }
    * ---------------------------------------------------------------- */
   var socket = null;
   var iceServers = [];
+  var signalFailures = 0;
+
+  /* The TV has no console and the viewer is across the room, so signalling
+   * state has to be legible on screen. */
+  function setSignalStatus(cls, label) {
+    if (currentView === 'play') setPill($('playStatus'), cls, label);
+    else if (currentView === 'join') setPill($('joinStatus'), cls, label);
+    else if (currentView === 'sender' && cls !== 'ok') setPill($('senderStatus'), cls, label);
+  }
+
+  function signalTransport() {
+    try { return socket.io.engine.transport.name; } catch (e) { return '?'; }
+  }
 
   function loadIceConfig(done) {
     var xhr = new XMLHttpRequest();
@@ -859,8 +872,37 @@ body.pseudo-fs .hud { z-index: 10000; }
       toast('Cannot reach the server (socket.io failed to load).', true);
       return null;
     }
-    socket = io({ transports: ['websocket', 'polling'], reconnectionDelay: 1000, reconnectionDelayMax: 5000 });
-    socket.on('connect_error', function () { toast('Signalling connection lost. Retrying...', true); });
+    socket = io({
+      /* Polling first, then upgrade. Plenty of TV browsers, captive-portal
+       * firmwares and proxies cannot open a WebSocket at all; listing
+       * websocket first strands them, because socket.io only falls back to
+       * the other transports when tryAllTransports is set. Polling always
+       * connects, then quietly upgrades where WebSocket does work. */
+      transports: ['polling', 'websocket'],
+      tryAllTransports: true,
+      upgrade: true,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000
+    });
+
+    socket.on('connect', function () {
+      signalFailures = 0;
+      setSignalStatus('ok', 'Connected');
+    });
+    socket.on('connect_error', function (err) {
+      signalFailures += 1;
+      setSignalStatus('err', 'No server');
+      // One toast, not one per retry - the retries are every second.
+      if (signalFailures === 1 || signalFailures === 6) {
+        toast('Cannot reach the server' + (err && err.message ? ' (' + err.message + ')' : '') +
+              '. Check the address and that the computer is still running it.', true);
+      }
+    });
+    socket.on('disconnect', function (reason) {
+      setSignalStatus('warn', 'Reconnecting');
+      if (reason === 'io server disconnect') socket.connect();
+    });
     socket.on('signal', function (msg) { routeSignal(msg); });
     socket.on('viewer:joined', function (msg) { senderOnViewerJoined(msg); });
     socket.on('viewer:left', function (msg) { senderOnViewerLeft(msg); });
@@ -1624,6 +1666,7 @@ body.pseudo-fs .hud { z-index: 10000; }
         if (pair && pair.currentRoundTripTime != null) {
           lines.push('rtt <b>' + Math.round(pair.currentRoundTripTime * 1000) + ' ms</b>');
         }
+        lines.push('signalling <b>' + escapeHtml(signalTransport()) + '</b>');
         $('viewerStats').innerHTML = lines.join('<br>');
 
         // Mirror the numbers back to the sender: nobody can read the TV's HUD
