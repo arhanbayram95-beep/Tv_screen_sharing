@@ -343,6 +343,10 @@ body.pseudo-fs .hud { z-index: 10000; }
         <label for="strictH264" style="margin:0">Force H.264 only (strip VP8/VP9/AV1)</label>
       </div>
       <div class="field check">
+        <input type="checkbox" id="maxCompat" checked>
+        <label for="maxCompat" style="margin:0">Legacy TV mode (one H.264 profile, no RTP extensions)</label>
+      </div>
+      <div class="field check">
         <input type="checkbox" id="stripMdns">
         <label for="stripMdns" style="margin:0">Strip <code>.local</code> mDNS ICE candidates</label>
       </div>
@@ -756,10 +760,106 @@ body.pseudo-fs .hud { z-index: 10000; }
     return out.join('\r\n');
   }
 
+  function sdpStripAllExtmap(sdp) {
+    var lines = splitSdp(sdp);
+    var out = [];
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].indexOf('a=extmap:') === 0) continue;
+      out.push(lines[i]);
+    }
+    return out.join('\r\n');
+  }
+
+  function sdpStripRtcpFb(sdp, type) {
+    var lines = splitSdp(sdp);
+    var out = [];
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].indexOf('a=rtcp-fb:') === 0 &&
+          lines[i].substring(lines[i].indexOf(' ') + 1) === type) continue;
+      out.push(lines[i]);
+    }
+    return out.join('\r\n');
+  }
+
+  /* Reduce the video section to exactly one H.264 codec plus its retransmission
+   * stream. Older decoders validate the whole codec list and reject the lot if
+   * any entry is unusable, so offering three H.264 profiles alongside RED and
+   * ULPFEC is a liability rather than a courtesy. */
+  function sdpKeepSingleH264(sdp) {
+    var lines = splitSdp(sdp);
+    var bounds = sectionBounds(lines, 'video');
+    if (!bounds) return sdp;
+
+    var rtpmap = {}, fmtp = {}, apt = {}, i, m;
+    for (i = bounds.start + 1; i < bounds.end; i++) {
+      m = /^a=rtpmap:(\d+)\s+([^/]+)\//.exec(lines[i]);
+      if (m) { rtpmap[m[1]] = m[2].toLowerCase(); continue; }
+      m = /^a=fmtp:(\d+)\s+(.*)$/.exec(lines[i]);
+      if (m) {
+        fmtp[m[1]] = m[2];
+        var a = /apt=(\d+)/.exec(m[2]);
+        if (a) apt[m[1]] = a[1];
+      }
+    }
+
+    var mParts = lines[bounds.start].split(' ');
+    var payloads = mParts.slice(3);
+    var h264 = [];
+    for (i = 0; i < payloads.length; i++) {
+      if (rtpmap[payloads[i]] === 'h264') h264.push(payloads[i]);
+    }
+    if (!h264.length) return sdp;
+
+    h264.sort(function (a, b) { return h264Rank(fmtp[b]) - h264Rank(fmtp[a]); });
+    var keepPt = h264[0];
+    var keep = [keepPt];
+    for (i = 0; i < payloads.length; i++) {
+      if (apt[payloads[i]] === keepPt) { keep.push(payloads[i]); break; }
+    }
+
+    var dropped = {};
+    for (i = 0; i < payloads.length; i++) {
+      if (keep.indexOf(payloads[i]) < 0) dropped[payloads[i]] = true;
+    }
+
+    // With no retransmission codec left, the FID grouping and its second SSRC
+    // describe a stream that no longer exists.
+    var keptRtx = keep.length > 1;
+    var rtxSsrc = null;
+    if (!keptRtx) {
+      for (i = bounds.start + 1; i < bounds.end; i++) {
+        m = /^a=ssrc-group:FID\s+(\d+)\s+(\d+)/.exec(lines[i]);
+        if (m) { rtxSsrc = m[2]; break; }
+      }
+    }
+
+    var out = [];
+    for (i = 0; i < lines.length; i++) {
+      if (i === bounds.start) { out.push(mParts.slice(0, 3).concat(keep).join(' ')); continue; }
+      if (i > bounds.start && i < bounds.end) {
+        m = /^a=(?:rtpmap|fmtp|rtcp-fb):(\d+)/.exec(lines[i]);
+        if (m && dropped[m[1]]) continue;
+        if (rtxSsrc) {
+          if (lines[i].indexOf('a=ssrc-group:FID') === 0) continue;
+          if (lines[i].indexOf('a=ssrc:' + rtxSsrc + ' ') === 0) continue;
+        }
+      }
+      out.push(lines[i]);
+    }
+    return out.join('\r\n');
+  }
+
   /* Everything that has to be true of an SDP before it goes over the wire to
    * a TV, applied on both ends so an older peer on either side is covered. */
-  function sdpForLegacyPeer(sdp) {
-    return sdpStripExtmapAllowMixed(sdp);
+  function sdpForLegacyPeer(sdp, maxCompat) {
+    sdp = sdpStripExtmapAllowMixed(sdp);
+    if (!maxCompat) return sdp;
+    sdp = sdpStripAllExtmap(sdp);
+    sdp = sdpKeepSingleH264(sdp);
+    // Pre-2019 stacks predate transport-wide congestion control; goog-remb,
+    // nack and PLI stay, so bandwidth estimation still functions.
+    sdp = sdpStripRtcpFb(sdp, 'transport-cc');
+    return sdp;
   }
 
   function sdpSetBitrate(sdp, media, kbps) {
@@ -996,7 +1096,8 @@ body.pseudo-fs .hud { z-index: 10000; }
       hint: $('hintSel').value,
       strictH264: $('strictH264').checked,
       stripMdns: $('stripMdns').checked,
-      stereo: $('stereoAudio').checked
+      stereo: $('stereoAudio').checked,
+      maxCompat: $('maxCompat').checked
     };
   }
 
@@ -1291,10 +1392,12 @@ body.pseudo-fs .hud { z-index: 10000; }
       });
     }).then(function () {
       applyEncodingParams(pc, s);
-      // Clean the copy that goes over the wire, not our own local description.
+      // Clean the copy that goes over the wire, not our own local description:
+      // payload numbers are preserved, so the answer still lines up with what
+      // this end negotiated locally.
       sendSignal(msg.viewerId, {
         kind: 'offer',
-        sdp: sdpForLegacyPeer(pc.localDescription.sdp),
+        sdp: sdpForLegacyPeer(pc.localDescription.sdp, s.maxCompat),
         type: pc.localDescription.type
       });
       renderViewerList();

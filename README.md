@@ -206,6 +206,10 @@ On a desktop keyboard `f`, `m` and `s` mirror green, yellow and red.
 decoders for H.264 only. Handed VP8 or VP9 they either fall back to a software decoder that manages
 about 5 fps at 1080p, or show a black frame. The sender therefore:
 
+- **Legacy TV mode** (on by default) cuts the offer down to a single H.264
+  profile plus its retransmission stream, removes every RTP header extension,
+  and drops `transport-cc`. Pre-2019 decoders validate the entire codec list and
+  reject all of it if any entry is unusable, so a richer offer is a liability;
 - calls `setCodecPreferences()` with H.264 first, ranked by profile — constrained baseline
   (`42e01f`) ahead of baseline (`42001f`) ahead of main, with high profile last, because that is
   the order of decreasing hardware support on TV silicon;
@@ -240,6 +244,7 @@ to diagnose it with.
 | **"Start sharing" does nothing / capture error** | The page is not in a secure context. Use `http://localhost:3000/share`, not the LAN IP. |
 | **TV browser can't reach the page at all** | Different subnets (very common: TV on guest Wi-Fi, laptop on the main SSID), or a host firewall. Allow TCP 3000: `sudo ufw allow 3000/tcp`. |
 | **PIN accepted, then stuck on "Connecting"** | ICE never completed. Usually Chrome's mDNS candidate obfuscation: the sender offers only `.local` addresses the TV cannot resolve. Tick **Strip `.local` mDNS ICE candidates** on the sender and reconnect. |
+| **"Failed to set remote video description send parameters"** | The TV's WebRTC stack rejecting the codec list or RTP extensions. Keep **Legacy TV mode** ticked on the sender (it is on by default): one H.264 profile, no header extensions, no transport-cc. |
 | **"Failed to parse SessionDescription... a=extmap expects two fields"** | An older TV WebRTC stack rejecting Chrome's `a=extmap-allow-mixed`. Stripped automatically since v1.0.4 — if you see it, the TV is running a cached copy of the page. Clear the TV browser cache or load the URL with `?x=1`. |
 | **Black screen, audio fine** | Codec mismatch — the TV cannot decode what is being sent. Press 🔴 Red to check the codec. If it is not H.264, confirm **Force H.264 only** is ticked and restart the share; some Chromium builds ship without an H.264 encoder, in which case use Chrome or Edge. |
 | **Stutter, tearing, or a few fps** | Software decoding or too much bitrate. Drop to 720p / 15 fps / 2.5 Mbps on the sender, and prefer 5 GHz Wi-Fi or Ethernet for the TV. |
