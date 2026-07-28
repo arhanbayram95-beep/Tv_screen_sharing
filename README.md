@@ -182,6 +182,23 @@ audio, at better quality than a custom app would manage. It costs nothing to che
 
 ---
 
+## Diagnosing from the TV
+
+A TV browser has no console, no devtools and no way to view source. Open
+
+```
+http://<computer-ip>:<port>/diag
+```
+
+on the TV itself and it prints, in text large enough to read from a sofa: the browser identity,
+whether WebRTC and WebSocket exist, and — the part that matters — **the exact list of video codecs
+that browser can receive**. It is also reachable from the PIN screen via *What this TV supports*.
+
+If it reports no H.264, this whole tool's default assumption is wrong for your set: untick
+*Force H.264 only* on the sender so a codec the TV does have can be negotiated.
+
+---
+
 ## Remote control reference
 
 | Key | Action |
@@ -244,7 +261,7 @@ to diagnose it with.
 | **"Start sharing" does nothing / capture error** | The page is not in a secure context. Use `http://localhost:3000/share`, not the LAN IP. |
 | **TV browser can't reach the page at all** | Different subnets (very common: TV on guest Wi-Fi, laptop on the main SSID), or a host firewall. Allow TCP 3000: `sudo ufw allow 3000/tcp`. |
 | **PIN accepted, then stuck on "Connecting"** | ICE never completed. Usually Chrome's mDNS candidate obfuscation: the sender offers only `.local` addresses the TV cannot resolve. Tick **Strip `.local` mDNS ICE candidates** on the sender and reconnect. |
-| **"Failed to set remote video description send parameters"** | The TV's WebRTC stack rejecting the codec list or RTP extensions. Keep **Legacy TV mode** ticked on the sender (it is on by default): one H.264 profile, no header extensions, no transport-cc. |
+| **"Failed to set remote video description send parameters"** | The TV's WebRTC stack rejecting the codec list. Open **`http://<ip>:<port>/diag` on the TV** — it prints what that browser can actually decode. If it reports **H.264: NO**, untick *Force H.264 only* on the sender. Keep **Legacy TV mode** ticked either way. |
 | **"Failed to parse SessionDescription... a=extmap expects two fields"** | An older TV WebRTC stack rejecting Chrome's `a=extmap-allow-mixed`. Stripped automatically since v1.0.4 — if you see it, the TV is running a cached copy of the page. Clear the TV browser cache or load the URL with `?x=1`. |
 | **Black screen, audio fine** | Codec mismatch — the TV cannot decode what is being sent. Press 🔴 Red to check the codec. If it is not H.264, confirm **Force H.264 only** is ticked and restart the share; some Chromium builds ship without an H.264 encoder, in which case use Chrome or Edge. |
 | **Stutter, tearing, or a few fps** | Software decoding or too much bitrate. Drop to 720p / 15 fps / 2.5 Mbps on the sender, and prefer 5 GHz Wi-Fi or Ethernet for the TV. |

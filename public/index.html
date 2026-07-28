@@ -339,7 +339,7 @@ body.pseudo-fs .hud { z-index: 10000; }
     <div class="grow card">
       <h2>TV compatibility</h2>
       <div class="field check">
-        <input type="checkbox" id="strictH264" checked>
+        <input type="checkbox" id="strictH264">
         <label for="strictH264" style="margin:0">Force H.264 only (strip VP8/VP9/AV1)</label>
       </div>
       <div class="field check">
@@ -355,7 +355,9 @@ body.pseudo-fs .hud { z-index: 10000; }
         <label for="stereoAudio" style="margin:0">Stereo system audio (Opus 128&nbsp;kbps)</label>
       </div>
       <p class="muted" id="compatNote">
-        H.264 is the only video codec Philips Saphi / Titan OS panels reliably decode in hardware.
+        H.264 is offered first either way, because it is the codec TV panels decode in hardware.
+        Ticking <b>Force H.264 only</b> removes the fallbacks &mdash; which fails outright on sets
+        whose WebRTC build has no H.264 at all. Open <b>/diag</b> on the TV to see what it supports.
       </p>
     </div>
 
@@ -396,6 +398,7 @@ body.pseudo-fs .hud { z-index: 10000; }
         <b>Red</b> stats &middot; <b>Green</b> fullscreen &middot; <b>Yellow</b> mute &middot; <b>Blue</b> reconnect
       </p>
       <button id="joinBack" class="ghost" style="margin-top:10px">&larr; Back</button>
+      <button id="diagBtn" class="ghost" style="margin-top:10px">What this TV supports</button>
     </div>
   </div>
 </div>
@@ -428,6 +431,16 @@ body.pseudo-fs .hud { z-index: 10000; }
       <div id="viewerStats" class="stats hidden" style="margin-top:10px"></div>
     </div>
   </div>
+</div>
+
+<!-- ========================== DIAGNOSTICS =========================== -->
+<div id="view-diag" class="view scroll overscan">
+  <div class="row spread">
+    <h1 style="margin:0">What this browser supports</h1>
+    <button id="diagBack" class="ghost">&larr; Back</button>
+  </div>
+  <p class="muted">Read this off the TV. The video codec list is the part that matters.</p>
+  <div id="diagOut" class="stats" style="font-size:1.1rem"></div>
 </div>
 
 <div id="toast" class="toast"></div>
@@ -574,16 +587,16 @@ body.pseudo-fs .hud { z-index: 10000; }
     return null;
   }
 
-  /* One press can raise both keydown and keypress. Suppress only the echo -
-   * the same digit within a few milliseconds - so that typing different
-   * digits quickly, or a genuine double press, still registers. */
-  var lastDigit = null;
-  var lastDigitAt = 0;
-  function acceptDigit(d) {
-    var now = new Date().getTime();
-    if (d === lastDigit && now - lastDigitAt < 50) return;
-    lastDigit = d;
-    lastDigitAt = now;
+  /* One press can raise both keydown and keypress. Tie the two together with
+   * the key's own lifecycle rather than a time window: a window drops the
+   * second half of a repeated digit ("1" then "1") when the presses are quick,
+   * whereas keyup always ends exactly one press. */
+  var digitTakenOnKeydown = false;
+  document.addEventListener('keyup', function () { digitTakenOnKeydown = false; }, false);
+
+  function acceptDigit(d, fromKeydown) {
+    if (!fromKeydown && digitTakenOnKeydown) return;
+    if (fromKeydown) digitTakenOnKeydown = true;
     pinPush(d);
   }
 
@@ -620,7 +633,7 @@ body.pseudo-fs .hud { z-index: 10000; }
     // Numeric keys drive PIN entry straight from the remote's number pad.
     if (currentView === 'join') {
       var digit = digitFromEvent(e);
-      if (digit !== null) { e.preventDefault(); acceptDigit(digit); return; }
+      if (digit !== null) { e.preventDefault(); acceptDigit(digit, true); return; }
     }
 
     if (currentView === 'play') {
@@ -643,7 +656,7 @@ body.pseudo-fs .hud { z-index: 10000; }
     var digit = digitFromEvent(e);
     if (digit === null) return;
     e.preventDefault();
-    acceptDigit(digit);
+    acceptDigit(digit, false);
   }, false);
 
   function handleBack() {
@@ -781,11 +794,13 @@ body.pseudo-fs .hud { z-index: 10000; }
     return out.join('\r\n');
   }
 
-  /* Reduce the video section to exactly one H.264 codec plus its retransmission
-   * stream. Older decoders validate the whole codec list and reject the lot if
-   * any entry is unusable, so offering three H.264 profiles alongside RED and
-   * ULPFEC is a liability rather than a courtesy. */
-  function sdpKeepSingleH264(sdp) {
+  /* Reduce the video section to one H.264 codec plus its retransmission stream,
+   * and - unless H.264 is being forced - one fallback codec as well. Older
+   * decoders validate the whole codec list and reject the lot if any entry is
+   * unusable, so three H.264 profiles alongside RED and ULPFEC is a liability;
+   * but stripping to H.264 alone fails outright on a set whose WebRTC build has
+   * no H.264, which is common on Linux-based TV firmware. */
+  function sdpKeepSingleH264(sdp, keepFallback) {
     var lines = splitSdp(sdp);
     var bounds = sectionBounds(lines, 'video');
     if (!bounds) return sdp;
@@ -811,10 +826,28 @@ body.pseudo-fs .hud { z-index: 10000; }
     if (!h264.length) return sdp;
 
     h264.sort(function (a, b) { return h264Rank(fmtp[b]) - h264Rank(fmtp[a]); });
-    var keepPt = h264[0];
-    var keep = [keepPt];
-    for (i = 0; i < payloads.length; i++) {
-      if (apt[payloads[i]] === keepPt) { keep.push(payloads[i]); break; }
+    var keep = [h264[0]];
+
+    if (keepFallback) {
+      // One fallback for sets with no H.264 decoder. VP8 first: every WebRTC
+      // build has it, and VP9/AV1 are heavier than such a set can manage.
+      var order = ['vp8', 'vp9'];
+      for (var o = 0; o < order.length && keep.length < 2; o++) {
+        for (i = 0; i < payloads.length; i++) {
+          if (rtpmap[payloads[i]] === order[o]) { keep.push(payloads[i]); break; }
+        }
+      }
+    }
+
+    // Retransmission codecs for whatever survived.
+    var primaries = keep.slice();
+    for (var pIdx = 0; pIdx < primaries.length; pIdx++) {
+      for (i = 0; i < payloads.length; i++) {
+        if (apt[payloads[i]] === primaries[pIdx] && keep.indexOf(payloads[i]) < 0) {
+          keep.push(payloads[i]);
+          break;
+        }
+      }
     }
 
     var dropped = {};
@@ -824,7 +857,8 @@ body.pseudo-fs .hud { z-index: 10000; }
 
     // With no retransmission codec left, the FID grouping and its second SSRC
     // describe a stream that no longer exists.
-    var keptRtx = keep.length > 1;
+    var keptRtx = false;
+    for (i = 0; i < keep.length; i++) if (apt[keep[i]]) keptRtx = true;
     var rtxSsrc = null;
     if (!keptRtx) {
       for (i = bounds.start + 1; i < bounds.end; i++) {
@@ -851,11 +885,11 @@ body.pseudo-fs .hud { z-index: 10000; }
 
   /* Everything that has to be true of an SDP before it goes over the wire to
    * a TV, applied on both ends so an older peer on either side is covered. */
-  function sdpForLegacyPeer(sdp, maxCompat) {
+  function sdpForLegacyPeer(sdp, maxCompat, strictH264) {
     sdp = sdpStripExtmapAllowMixed(sdp);
     if (!maxCompat) return sdp;
     sdp = sdpStripAllExtmap(sdp);
-    sdp = sdpKeepSingleH264(sdp);
+    sdp = sdpKeepSingleH264(sdp, !strictH264);
     // Pre-2019 stacks predate transport-wide congestion control; goog-remb,
     // nack and PLI stay, so bandwidth estimation still functions.
     sdp = sdpStripRtcpFb(sdp, 'transport-cc');
@@ -1397,7 +1431,7 @@ body.pseudo-fs .hud { z-index: 10000; }
       // this end negotiated locally.
       sendSignal(msg.viewerId, {
         kind: 'offer',
-        sdp: sdpForLegacyPeer(pc.localDescription.sdp, s.maxCompat),
+        sdp: sdpForLegacyPeer(pc.localDescription.sdp, s.maxCompat, s.strictH264),
         type: pc.localDescription.type
       });
       renderViewerList();
@@ -1881,6 +1915,8 @@ body.pseudo-fs .hud { z-index: 10000; }
   on($('goViewer'), 'click', function () { role = 'viewer'; pinBuffer = ''; renderPin(); showView('join'); });
   on($('senderBack'), 'click', function () { stopSharing(); showView('home'); });
   on($('joinBack'), 'click', function () { showView('home'); });
+  on($('diagBack'), 'click', function () { showView('join'); });
+  on($('diagBtn'), 'click', function () { renderDiagnostics(); showView('diag'); });
 
   on($('startShareBtn'), 'click', function () { startShare('screen'); });
   on($('startCameraBtn'), 'click', function () { startShare('camera'); });
@@ -1935,6 +1971,67 @@ body.pseudo-fs .hud { z-index: 10000; }
     if (localStream) stopSharing();
     if (viewerPc) leaveViewer();
   };
+
+  /* The TV has no console and no devtools. When negotiation fails there is no
+   * way to know what the set can actually decode except to ask it and print
+   * the answer large enough to read from a sofa. */
+  function renderDiagnostics() {
+    var rows = [];
+    function row(label, value, warn) {
+      rows.push('<div style="margin-bottom:10px">' + escapeHtml(label) + ': <b' +
+        (warn ? ' style="color:#ff8fa3"' : '') + '>' + escapeHtml(String(value)) + '</b></div>');
+    }
+
+    function codecList(kind, direction) {
+      var api = direction === 'send' ? window.RTCRtpSender : window.RTCRtpReceiver;
+      if (!api || !api.getCapabilities) return null;
+      var caps;
+      try { caps = api.getCapabilities(kind); } catch (e) { return null; }
+      if (!caps || !caps.codecs) return null;
+      var names = [];
+      for (var i = 0; i < caps.codecs.length; i++) {
+        var mt = String(caps.codecs[i].mimeType || '').replace(/^(video|audio)\//i, '');
+        if (/^(rtx|red|ulpfec|flexfec)/i.test(mt)) continue;
+        var fmtp = caps.codecs[i].sdpFmtpLine || '';
+        var profile = /profile-level-id=([0-9a-fA-F]{6})/.exec(fmtp);
+        var label = mt + (profile ? ' (' + profile[1] + ')' : '');
+        if (names.indexOf(label) < 0) names.push(label);
+      }
+      return names;
+    }
+
+    var recvVideo = codecList('video', 'recv');
+    var hasH264 = recvVideo && recvVideo.join(' ').toLowerCase().indexOf('h264') >= 0;
+
+    row('Browser', navigator.userAgent);
+    row('WebRTC (RTCPeerConnection)', PeerConnection ? 'yes' : 'NO', !PeerConnection);
+    row('WebSocket', window.WebSocket ? 'yes' : 'no (polling will be used)');
+    row('Secure context', window.isSecureContext ? 'yes' : 'no');
+    row('Fullscreen API', (document.documentElement.requestFullscreen ||
+      document.documentElement.webkitRequestFullscreen) ? 'yes' : 'no (CSS fallback used)');
+    row('setCodecPreferences', (window.RTCRtpTransceiver &&
+      RTCRtpTransceiver.prototype.setCodecPreferences) ? 'yes' : 'no');
+
+    if (recvVideo === null) {
+      row('Video codecs it can receive', 'cannot be queried on this browser', true);
+      rows.push('<div class="muted" style="margin-top:14px">This browser is too old to report ' +
+        'its codecs. If video fails, untick "Force H.264 only" on the computer and retry.</div>');
+    } else {
+      row('Video codecs it can receive', recvVideo.join(', ') || 'none reported', !recvVideo.length);
+      row('H.264 supported', hasH264 ? 'YES' : 'NO', !hasH264);
+      if (!hasH264) {
+        rows.push('<div style="margin-top:14px;padding:12px;border:2px solid #b8394b;' +
+          'border-radius:10px">This TV cannot receive <b>H.264</b>. On the computer, ' +
+          '<b>untick &quot;Force H.264 only&quot;</b> so a codec it does support can be ' +
+          'negotiated instead.</div>');
+      }
+    }
+
+    var recvAudio = codecList('audio', 'recv');
+    row('Audio codecs it can receive', recvAudio ? (recvAudio.join(', ') || 'none') : 'unknown');
+
+    $('diagOut').innerHTML = rows.join('');
+  }
 
   /* Says up front which capture modes this device can actually offer, so a
    * phone user is not left tapping a button that silently cannot work. */
@@ -2001,7 +2098,10 @@ body.pseudo-fs .hud { z-index: 10000; }
     var pinMatch = /[?&]pin=(\d{6})/.exec(query);
 
     loadIceConfig(function () {
-      if (path.indexOf('/tv') === 0 || path.indexOf('/viewer') === 0 || path.indexOf('/watch') === 0 ||
+      if (path.indexOf('/diag') === 0) {
+        renderDiagnostics();
+        showView('diag');
+      } else if (path.indexOf('/tv') === 0 || path.indexOf('/viewer') === 0 || path.indexOf('/watch') === 0 ||
           /[?&]role=viewer/.test(query)) {
         role = 'viewer';
         showView('join');

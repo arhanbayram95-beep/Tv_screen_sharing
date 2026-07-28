@@ -136,6 +136,8 @@ app.use(
 // path to preselect a role so nobody has to arrow through a menu on the couch.
 app.get(['/tv', '/viewer', '/watch'], (_req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
 app.get(['/share', '/sender', '/host'], (_req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
+// Self-report page: the only way to see what a TV browser can actually decode.
+app.get('/diag', (_req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
 
 app.get('/api/ice', (_req, res) => {
   const iceServers = [];
