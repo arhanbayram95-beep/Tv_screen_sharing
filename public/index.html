@@ -557,6 +557,32 @@ body.pseudo-fs .hud { z-index: 10000; }
     PLAY_PAUSE: 179, PLAY: 415, STOP: 413
   };
 
+  /* TV remotes disagree about how a number key arrives: some send keyCode
+   * 48-57, some only populate charCode on keypress, newer ones set e.key.
+   * Accept all of them rather than betting on one. */
+  function digitFromEvent(e) {
+    if (e.key && e.key.length === 1 && e.key >= '0' && e.key <= '9') return e.key;
+    var k = e.keyCode || e.which || 0;
+    if (k >= 48 && k <= 57) return String(k - 48);
+    if (k >= 96 && k <= 105) return String(k - 96);
+    var c = e.charCode || 0;
+    if (c >= 48 && c <= 57) return String(c - 48);
+    return null;
+  }
+
+  /* One press can raise both keydown and keypress. Suppress only the echo -
+   * the same digit within a few milliseconds - so that typing different
+   * digits quickly, or a genuine double press, still registers. */
+  var lastDigit = null;
+  var lastDigitAt = 0;
+  function acceptDigit(d) {
+    var now = new Date().getTime();
+    if (d === lastDigit && now - lastDigitAt < 50) return;
+    lastDigit = d;
+    lastDigitAt = now;
+    pinPush(d);
+  }
+
   document.addEventListener('keydown', function (e) {
     var k = e.keyCode || e.which;
     var tag = (document.activeElement && document.activeElement.tagName) || '';
@@ -589,10 +615,8 @@ body.pseudo-fs .hud { z-index: 10000; }
 
     // Numeric keys drive PIN entry straight from the remote's number pad.
     if (currentView === 'join') {
-      var digit = -1;
-      if (k >= 48 && k <= 57) digit = k - 48;
-      else if (k >= 96 && k <= 105) digit = k - 96;
-      if (digit >= 0) { e.preventDefault(); pinPush(String(digit)); return; }
+      var digit = digitFromEvent(e);
+      if (digit !== null) { e.preventDefault(); acceptDigit(digit); return; }
     }
 
     if (currentView === 'play') {
@@ -607,6 +631,15 @@ body.pseudo-fs .hud { z-index: 10000; }
       else if (e.key === 'm') toggleMute();
       else if (e.key === 's') toggleStats();
     }
+  }, false);
+
+  /* Fallback for remotes whose digits never reach keydown with a usable code. */
+  document.addEventListener('keypress', function (e) {
+    if (currentView !== 'join') return;
+    var digit = digitFromEvent(e);
+    if (digit === null) return;
+    e.preventDefault();
+    acceptDigit(digit);
   }, false);
 
   function handleBack() {
@@ -705,6 +738,28 @@ body.pseudo-fs .hud { z-index: 10000; }
       out.push(lines[i]);
     }
     return out.join('\r\n');
+  }
+
+  /* Chrome announces `a=extmap-allow-mixed` at session level. WebRTC stacks
+   * older than roughly 2019 - which includes the browser in Philips Saphi and
+   * most TV firmware of that era - tokenise it as an `a=extmap` attribute with
+   * a missing second field and reject the whole session description with
+   * "Failed to parse SessionDescription. a=extmap ... expects two fields".
+   * Dropping the line only forfeits mixed one/two-byte header extensions. */
+  function sdpStripExtmapAllowMixed(sdp) {
+    var lines = splitSdp(sdp);
+    var out = [];
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].indexOf('a=extmap-allow-mixed') === 0) continue;
+      out.push(lines[i]);
+    }
+    return out.join('\r\n');
+  }
+
+  /* Everything that has to be true of an SDP before it goes over the wire to
+   * a TV, applied on both ends so an older peer on either side is covered. */
+  function sdpForLegacyPeer(sdp) {
+    return sdpStripExtmapAllowMixed(sdp);
   }
 
   function sdpSetBitrate(sdp, media, kbps) {
@@ -1236,7 +1291,12 @@ body.pseudo-fs .hud { z-index: 10000; }
       });
     }).then(function () {
       applyEncodingParams(pc, s);
-      sendSignal(msg.viewerId, { kind: 'offer', sdp: pc.localDescription.sdp, type: pc.localDescription.type });
+      // Clean the copy that goes over the wire, not our own local description.
+      sendSignal(msg.viewerId, {
+        kind: 'offer',
+        sdp: sdpForLegacyPeer(pc.localDescription.sdp),
+        type: pc.localDescription.type
+      });
       renderViewerList();
     })['catch'](function (err) {
       toast('Could not create the offer: ' + err, true);
@@ -1470,7 +1530,10 @@ body.pseudo-fs .hud { z-index: 10000; }
       viewerPc.onaddstream = function (e) { useStream(e.stream); };
     }
 
-    pcOp(viewerPc, 'setRemoteDescription', new SessionDescription({ type: 'offer', sdp: sdp }))
+    // Clean it here too: this is the parser that actually rejects the line,
+    // and it protects the TV even against a sender running older code.
+    pcOp(viewerPc, 'setRemoteDescription',
+         new SessionDescription({ type: 'offer', sdp: sdpForLegacyPeer(sdp) }))
       .then(function () {
         preferH264OnReceiver(viewerPc);
         for (var i = 0; i < pendingCandidates.length; i++) {
