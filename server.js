@@ -20,9 +20,18 @@ const path = require('path');
 const express = require('express');
 const { Server } = require('socket.io');
 
+/* CLI flags beat env vars: `PORT=4000 npm start` is not valid syntax in
+ * Windows cmd or PowerShell, so `--port 4000` is the portable spelling. */
+function flagValue(flag) {
+  const index = process.argv.indexOf(flag);
+  if (index < 0) return null;
+  const value = process.argv[index + 1];
+  return value && value.charAt(0) !== '-' ? value : null;
+}
+
 const config = {
-  port: Number(process.env.PORT || 3000),
-  httpsPort: Number(process.env.HTTPS_PORT || 3443),
+  port: Number(flagValue('--port') || process.env.PORT || 3000),
+  httpsPort: Number(flagValue('--https-port') || process.env.HTTPS_PORT || 3443),
   bindHost: process.env.HOST || '0.0.0.0',
   maxViewersPerRoom: Number(process.env.MAX_VIEWERS || 4),
   // A room with no host and no viewers is dropped immediately; this only caps
@@ -413,8 +422,34 @@ function ready() {
   if (listening === expected) banner();
 }
 
+/* A port clash is the most likely startup failure and Node's default output
+ * for it is a bare stack trace, so say what to do instead. */
+function onListenError(which, port) {
+  return (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error('');
+      console.error(`  Port ${port} is already in use by another program.`);
+      console.error('');
+      console.error('  Start on a different port instead:');
+      console.error(`    npm start -- ${which === 'https' ? '--https --https-port' : '--port'} ${port + 1}`);
+      console.error('');
+      console.error(`  Whatever port you pick, the TV URL becomes http://<your-ip>:<port>/tv`);
+      console.error('');
+    } else if (err.code === 'EACCES') {
+      console.error(`\n  Not allowed to bind port ${port}. Ports below 1024 need admin rights.\n`);
+    } else {
+      console.error(err);
+    }
+    process.exit(1);
+  };
+}
+
+server.on('error', onListenError('http', config.port));
 server.listen(config.port, config.bindHost, ready);
-if (secureServer) secureServer.listen(config.httpsPort, config.bindHost, ready);
+if (secureServer) {
+  secureServer.on('error', onListenError('https', config.httpsPort));
+  secureServer.listen(config.httpsPort, config.bindHost, ready);
+}
 
 process.on('SIGINT', () => {
   log('shutting down');

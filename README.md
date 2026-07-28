@@ -36,6 +36,22 @@ The server prints the addresses to use:
 
 Run `npm run dev` instead of `npm start` to auto-restart the server while editing.
 
+### If port 3000 is taken
+
+Very likely — 3000 is the default for half the Node backends in existence. Pick another:
+
+```bash
+npm start -- --port 4000            # any free port
+npm run start:https -- --port 4000 --https-port 4443
+```
+
+`--port` works identically on macOS, Linux and Windows. (`PORT=4000 npm start` also works, but that
+syntax is invalid in Windows `cmd` and PowerShell, which is why the flag exists.) The server prints
+the URLs for whichever port it ends up on, and tells you what to do if the port is busy rather than
+dumping a stack trace.
+
+Whatever port you choose, the TV URL becomes `http://<your-ip>:<port>/tv`.
+
 ### Why `localhost` for the sender
 
 Browsers only expose `navigator.mediaDevices.getDisplayMedia` in a *secure context*. `http://localhost`
@@ -228,6 +244,7 @@ to diagnose it with.
 | **No sound at all** | The capture has no audio track — the sender warns about this. Re-share and tick **Share system audio** in the picker. On macOS Chrome cannot capture system audio for a whole screen; share a **tab** instead, or install a loopback device. |
 | **Sound only after pressing OK** | Working as designed; TV autoplay policy. |
 | **Text looks soft** | Set **Optimise for → Text & detail**. That pins resolution and drops frames under load instead of blurring. |
+| **`EADDRINUSE` / port in use** | Another program holds that port. `npm start -- --port 4000`. |
 | **"Too many wrong PINs"** | Ten failed attempts from one address triggers a 10-minute block. Wait it out, or restart the server. |
 | **Picture stops when the laptop sleeps** | Expected. Disable sleep on the sender for long sessions. |
 | **Phone: "Share this camera" is greyed out** | The page is not HTTPS. See *Phones and tablets* above. |
@@ -247,12 +264,12 @@ Environment variables, all optional:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `PORT` | `3000` | HTTP port |
+| `PORT` / `--port` | `3000` | HTTP port |
 | `HOST` | `0.0.0.0` | Bind address |
 | `MAX_VIEWERS` | `4` | Concurrent TVs per share |
 | `JOIN_FAIL_MAX` | `10` | Wrong PINs before an address is blocked |
 | `JOIN_FAIL_WINDOW_MS` | `600000` | Block window, ms |
-| `HTTPS_PORT` | `3443` | HTTPS port when started with `--https` |
+| `HTTPS_PORT` / `--https-port` | `3443` | HTTPS port when started with `--https` |
 | `TLS_CERT` / `TLS_KEY` | – | Use your own certificate instead of a generated one |
 | `STUN_URL` | – | STUN server; unnecessary on a LAN |
 | `TURN_URL` / `TURN_USERNAME` / `TURN_CREDENTIAL` | – | TURN relay, for segmented networks |
