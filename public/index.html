@@ -1005,25 +1005,39 @@ body.pseudo-fs .hud { z-index: 10000; }
    * callback form rather than being reported as the failure. */
   function pcOp(pc, method, arg) {
     return new Promise(function (resolve, reject) {
-      function callbackForm(originalError) {
+      var fn = pc[method];
+      if (typeof fn !== 'function') { reject(new Error(method + ' is unsupported')); return; }
+
+      var argCount = arg === undefined ? 0 : 1;
+      function callbackForm(fallbackError) {
         try {
-          if (arg === undefined) pc[method](resolve, reject);
-          else pc[method](arg, resolve, reject);
-        } catch (err) {
-          reject(originalError || err);
-        }
+          if (argCount === 0) fn.call(pc, resolve, reject);
+          else fn.call(pc, arg, resolve, reject);
+        } catch (err) { reject(fallbackError || err); }
       }
+
+      // The declared arity says whether this build predates promises: Chromium
+      // 49 declares createAnswer(success, failure), modern builds declare
+      // createAnswer(options) with the argument optional.
+      if (fn.length > argCount) { callbackForm(null); return; }
 
       var result;
       try {
-        result = arg === undefined ? pc[method]() : pc[method](arg);
+        result = argCount === 0 ? fn.call(pc) : fn.call(pc, arg);
       } catch (err) {
+        // Nothing ran, so reaching for the callback form is safe here.
         callbackForm(err);
         return;
       }
 
       if (result && typeof result.then === 'function') { result.then(resolve, reject); return; }
-      callbackForm(null);
+
+      /* No promise, but no throw either: a pre-promise engine has already
+       * performed the operation and returned undefined. Calling again would
+       * apply the same description twice, which is exactly what produces
+       * "Failed to set local answer sdp: Called in wrong state:
+       * STATE_INPROGRESS". Treat it as done. */
+      resolve();
     });
   }
 
