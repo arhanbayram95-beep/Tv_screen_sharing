@@ -182,6 +182,18 @@ audio, at better quality than a custom app would manage. It costs nothing to che
 
 ---
 
+## Is the TV running the current page?
+
+Every screen shows a build marker — bottom of the PIN screen, top of `/diag`, and in the stats
+panel. If it does not match the `BUILD` constant in `public/index.html`, the TV is serving a cached
+copy and you are debugging code that is not running.
+
+The server sends `no-store` with no `ETag` or `Last-Modified` on every HTML route, which is the only
+thing these engines reliably honour. If a set still holds on to an old copy, load
+`http://<ip>:<port>/tv?x=2`, changing the number each time.
+
+---
+
 ## Diagnosing from the TV
 
 A TV browser has no console, no devtools and no way to view source. Open

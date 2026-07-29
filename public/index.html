@@ -399,6 +399,7 @@ body.pseudo-fs .hud { z-index: 10000; }
       </p>
       <button id="joinBack" class="ghost" style="margin-top:10px">&larr; Back</button>
       <button id="diagBtn" class="ghost" style="margin-top:10px">What this TV supports</button>
+      <p class="muted" id="buildStampJoin" style="margin-top:14px"></p>
     </div>
   </div>
 </div>
@@ -459,6 +460,11 @@ body.pseudo-fs .hud { z-index: 10000; }
   /* ---------------------------------------------------------------- *
    * DOM + tiny helpers
    * ---------------------------------------------------------------- */
+  /* Bumped on every change that matters to the TV. Displayed on screen so a
+   * stale cached page is obvious at a glance instead of costing a debugging
+   * round trip. */
+  var BUILD = 'build 9';
+
   function $(id) { return document.getElementById(id); }
   function on(el, ev, fn) { if (el) el.addEventListener(ev, fn, false); }
   function text(el, s) { if (el) el.textContent = s; }
@@ -2063,7 +2069,7 @@ body.pseudo-fs .hud { z-index: 10000; }
       var video = $('remoteVideo');
       if (!st) {
         $('viewerStats').innerHTML = 'Waiting for media...<br>signalling <b>' +
-          escapeHtml(signalTransport()) + '</b>';
+          escapeHtml(signalTransport()) + '</b> &middot; ' + escapeHtml(BUILD);
         return;
       }
 
@@ -2084,7 +2090,7 @@ body.pseudo-fs .hud { z-index: 10000; }
       if (st.audioCodec) lines.push('audio <b>' + escapeHtml(st.audioCodec) + '</b>' +
                                     (video.muted ? ' (muted)' : ''));
       if (st.rtt != null) lines.push('rtt <b>' + st.rtt + ' ms</b>');
-      lines.push('signalling <b>' + escapeHtml(signalTransport()) + '</b>');
+      lines.push('signalling <b>' + escapeHtml(signalTransport()) + '</b> &middot; ' + escapeHtml(BUILD));
 
       /* A black screen has two very different causes and the numbers tell them
        * apart: nothing arriving is a network problem, whereas bytes arriving
@@ -2238,6 +2244,7 @@ body.pseudo-fs .hud { z-index: 10000; }
     var recvVideo = codecList('video', 'recv');
     var hasH264 = recvVideo && recvVideo.join(' ').toLowerCase().indexOf('h264') >= 0;
 
+    row('Page version', BUILD);
     row('Browser', navigator.userAgent);
     row('WebRTC (RTCPeerConnection)', PeerConnection ? 'yes' : 'NO', !PeerConnection);
     row('WebSocket', window.WebSocket ? 'yes' : 'no (polling will be used)');
@@ -2327,6 +2334,7 @@ body.pseudo-fs .hud { z-index: 10000; }
     renderPin();
     updateMuteButton();
     describeCapture();
+    text($('buildStampJoin'), BUILD);
 
     var path = location.pathname.toLowerCase();
     var query = location.search;

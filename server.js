@@ -121,23 +121,41 @@ function recordJoinFailure(ip) {
 const app = express();
 app.disable('x-powered-by');
 
+/*
+ * TV browsers cache aggressively, have no devtools, and often no visible way
+ * to clear history. `no-cache` still permits a stale copy to be revalidated
+ * and served; `no-store` is the only thing these engines reliably honour, and
+ * serving a stale page here costs hours of confusion because the symptoms look
+ * like the bug you just fixed.
+ */
+function noStore(res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+}
+
+function sendApp(res) {
+  noStore(res);
+  res.sendFile(path.join(PUBLIC_DIR, 'index.html'), { etag: false, lastModified: false });
+}
+
 app.use(
   express.static(PUBLIC_DIR, {
-    etag: true,
+    etag: false,
+    lastModified: false,
     maxAge: 0,
     setHeaders(res) {
-      // TV browsers cache aggressively and have no devtools to clear it with.
-      res.setHeader('Cache-Control', 'no-cache');
+      noStore(res);
     },
   })
 );
 
 // Short, remote-typable aliases. Both render the same SPA; the client reads the
 // path to preselect a role so nobody has to arrow through a menu on the couch.
-app.get(['/tv', '/viewer', '/watch'], (_req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
-app.get(['/share', '/sender', '/host'], (_req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
+app.get(['/tv', '/viewer', '/watch'], (_req, res) => sendApp(res));
+app.get(['/share', '/sender', '/host'], (_req, res) => sendApp(res));
 // Self-report page: the only way to see what a TV browser can actually decode.
-app.get('/diag', (_req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
+app.get('/diag', (_req, res) => sendApp(res));
 
 app.get('/api/ice', (_req, res) => {
   const iceServers = [];
