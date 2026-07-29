@@ -997,19 +997,33 @@ body.pseudo-fs .hud { z-index: 10000; }
   var SessionDescription = window.RTCSessionDescription || window.mozRTCSessionDescription;
   var IceCandidate = window.RTCIceCandidate || window.mozRTCIceCandidate;
 
-  /* Old engines expose the callback form of these methods only. */
+  /* Old engines expose the callback form of these methods only.
+   *
+   * Chromium 49 - still shipping in 2016-era TV browsers - throws
+   * "1 argument required, but only 0 present" when createAnswer is called
+   * without callbacks, so a synchronous throw has to fall through to the
+   * callback form rather than being reported as the failure. */
   function pcOp(pc, method, arg) {
     return new Promise(function (resolve, reject) {
+      function callbackForm(originalError) {
+        try {
+          if (arg === undefined) pc[method](resolve, reject);
+          else pc[method](arg, resolve, reject);
+        } catch (err) {
+          reject(originalError || err);
+        }
+      }
+
       var result;
       try {
         result = arg === undefined ? pc[method]() : pc[method](arg);
-      } catch (err) { reject(err); return; }
+      } catch (err) {
+        callbackForm(err);
+        return;
+      }
 
       if (result && typeof result.then === 'function') { result.then(resolve, reject); return; }
-      try {
-        if (arg === undefined) pc[method](resolve, reject);
-        else pc[method](arg, resolve, reject);
-      } catch (err2) { reject(err2); }
+      callbackForm(null);
     });
   }
 
