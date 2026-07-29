@@ -1041,16 +1041,44 @@ body.pseudo-fs .hud { z-index: 10000; }
     });
   }
 
+  /* Feature-detect rather than try/catch. Chromium 49 has no srcObject at all,
+   * and assigning to a property an element does not define silently creates an
+   * expando instead of throwing - so a try/catch fallback never fires and the
+   * result is a black screen with no error anywhere. */
   function attachStream(video, stream) {
-    try {
-      video.srcObject = stream;
-    } catch (e) {
+    if ('srcObject' in video) {
       try {
-        video.src = (window.URL || window.webkitURL).createObjectURL(stream);
-      } catch (e2) {
-        toast('This browser cannot attach the video stream.', true);
-      }
+        video.srcObject = stream;
+        return true;
+      } catch (e) { /* fall through to the object-URL path */ }
     }
+
+    var urlApi = window.URL || window.webkitURL;
+    if (urlApi && urlApi.createObjectURL) {
+      try {
+        if (video.__objectUrl && urlApi.revokeObjectURL) urlApi.revokeObjectURL(video.__objectUrl);
+        var url = urlApi.createObjectURL(stream);
+        video.__objectUrl = url;
+        video.src = url;
+        return true;
+      } catch (e2) { /* reported below */ }
+    }
+
+    toast('This browser cannot attach the video stream.', true);
+    return false;
+  }
+
+  function detachStream(video) {
+    var urlApi = window.URL || window.webkitURL;
+    if (video.__objectUrl && urlApi && urlApi.revokeObjectURL) {
+      try { urlApi.revokeObjectURL(video.__objectUrl); } catch (e) {}
+      video.__objectUrl = null;
+    }
+    if ('srcObject' in video) {
+      try { video.srcObject = null; return; } catch (e) {}
+    }
+    video.removeAttribute('src');
+    try { video.load(); } catch (e) {}
   }
 
   function getStatsSafe(pc) {
@@ -1618,6 +1646,9 @@ body.pseudo-fs .hud { z-index: 10000; }
                 ' &middot; ' + escapeHtml(entry.stats.res || '?') +
                 ' @ ' + escapeHtml(String(entry.stats.fps || '?')) + ' fps' +
                 ' &middot; ' + escapeHtml(String(entry.stats.kbpsLabel || '')) + '</span>';
+        if (entry.stats.note) {
+          line += '<br><span style="color:#ff8fa3">TV: ' + escapeHtml(entry.stats.note) + '</span>';
+        }
       }
       html += line + '</div>';
     }
@@ -1952,52 +1983,137 @@ body.pseudo-fs .hud { z-index: 10000; }
     viewerStatsTimer = setInterval(viewerStatsTick, 3000);
   }
 
-  function viewerStatsTick() {
-    (function () {
-      if (!viewerPc) return;
-      getStatsSafe(viewerPc).then(function (report) {
-        if (!report) { $('viewerStats').innerHTML = 'Stats unavailable on this browser.'; return; }
-        var vin = null, ain = null, pair = null;
-        eachStat(report, function (s) {
-          if (s.type === 'inbound-rtp' && (s.kind === 'video' || s.mediaType === 'video')) vin = s;
-          if (s.type === 'inbound-rtp' && (s.kind === 'audio' || s.mediaType === 'audio')) ain = s;
-          if (s.type === 'candidate-pair' && (s.nominated || s.selected) && s.state === 'succeeded') pair = s;
-        });
-        if (!vin) return;
-
-        var kbps = null, now = Date.now();
-        if (viewerPrev && vin.bytesReceived != null) {
-          var dt = (now - viewerPrev.t) / 1000;
-          if (dt > 0) kbps = ((vin.bytesReceived - viewerPrev.bytes) * 8) / 1000 / dt;
-        }
-        viewerPrev = { t: now, bytes: vin.bytesReceived || 0 };
-
-        var codec = codecName(report, vin.codecId) || '?';
-        var res = (vin.frameWidth || '?') + 'x' + (vin.frameHeight || '?');
-        var fps = Math.round(vin.framesPerSecond || 0);
-
-        var lines = [];
-        lines.push('video <b>' + escapeHtml(codec) + '</b> ' + escapeHtml(res) + ' @ ' + fps + ' fps');
-        lines.push('bitrate <b>' + fmtKbps(kbps) + '</b>' +
-                   (vin.packetsLost != null ? ' &middot; lost <b>' + vin.packetsLost + '</b>' : ''));
-        if (vin.decoderImplementation) lines.push('decoder <b>' + escapeHtml(vin.decoderImplementation) + '</b>');
-        if (ain) lines.push('audio <b>' + escapeHtml(codecName(report, ain.codecId) || '?') + '</b>' +
-                            ($('remoteVideo').muted ? ' (muted)' : ''));
-        if (pair && pair.currentRoundTripTime != null) {
-          lines.push('rtt <b>' + Math.round(pair.currentRoundTripTime * 1000) + ' ms</b>');
-        }
-        lines.push('signalling <b>' + escapeHtml(signalTransport()) + '</b>');
-        $('viewerStats').innerHTML = lines.join('<br>');
-
-        // Mirror the numbers back to the sender: nobody can read the TV's HUD
-        // from the machine that is doing the sharing.
-        if (viewerHostId) {
-          sendSignal(viewerHostId, {
-            kind: 'stats', codec: codec, res: res, fps: fps, kbpsLabel: fmtKbps(kbps)
-          });
-        }
+  /* Normalises both stats APIs into one shape. Chromium 49 only has the
+   * callback form with its own googXxx key names, so without this the TV can
+   * report nothing at all - which is exactly when you most need numbers. */
+  function readInboundStats(pc, done) {
+    function fromModern(report) {
+      var vin = null, ain = null, pair = null;
+      eachStat(report, function (s) {
+        if (s.type === 'inbound-rtp' && (s.kind === 'video' || s.mediaType === 'video')) vin = s;
+        if (s.type === 'inbound-rtp' && (s.kind === 'audio' || s.mediaType === 'audio')) ain = s;
+        if (s.type === 'candidate-pair' && (s.nominated || s.selected) && s.state === 'succeeded') pair = s;
       });
-    })();
+      if (!vin) return null;
+      return {
+        codec: codecName(report, vin.codecId) || '?',
+        width: vin.frameWidth || 0,
+        height: vin.frameHeight || 0,
+        fps: Math.round(vin.framesPerSecond || 0),
+        bytes: vin.bytesReceived || 0,
+        lost: vin.packetsLost,
+        decoder: vin.decoderImplementation || null,
+        audioCodec: ain ? (codecName(report, ain.codecId) || '?') : null,
+        rtt: pair && pair.currentRoundTripTime != null ? Math.round(pair.currentRoundTripTime * 1000) : null
+      };
+    }
+
+    function fromLegacy(response) {
+      var reports = [];
+      try { reports = response.result(); } catch (e) { return null; }
+      var out = { codec: '?', width: 0, height: 0, fps: 0, bytes: 0, lost: null,
+                  decoder: null, audioCodec: null, rtt: null };
+      var sawVideo = false;
+      for (var i = 0; i < reports.length; i++) {
+        var r = reports[i];
+        var get = function (name) {
+          try { return r.stat(name); } catch (e) { return ''; }
+        };
+        if (r.type === 'ssrc') {
+          var isVideo = get('mediaType') === 'video' || get('googFrameWidthReceived') !== '';
+          var received = get('bytesReceived');
+          if (isVideo && received !== '') {
+            sawVideo = true;
+            out.bytes = Number(received) || 0;
+            out.width = Number(get('googFrameWidthReceived')) || 0;
+            out.height = Number(get('googFrameHeightReceived')) || 0;
+            out.fps = Number(get('googFrameRateReceived')) || 0;
+            out.lost = get('packetsLost') !== '' ? Number(get('packetsLost')) : null;
+            out.codec = get('googCodecName') || '?';
+          } else if (!isVideo && received !== '') {
+            out.audioCodec = get('googCodecName') || '?';
+          }
+        } else if (r.type === 'googCandidatePair' && get('googActiveConnection') === 'true') {
+          var rtt = get('googRtt');
+          if (rtt !== '') out.rtt = Number(rtt);
+        }
+      }
+      return sawVideo ? out : null;
+    }
+
+    if (!pc || !pc.getStats) { done(null); return; }
+    var result;
+    try {
+      result = pc.getStats.length > 0 ? undefined : pc.getStats();
+    } catch (e) {
+      result = undefined;
+    }
+    if (result && typeof result.then === 'function') {
+      result.then(function (report) { done(fromModern(report)); }, function () { done(null); });
+      return;
+    }
+    try {
+      pc.getStats(function (response) { done(fromLegacy(response)); });
+    } catch (e) { done(null); }
+  }
+
+  function viewerStatsTick() {
+    if (!viewerPc) return;
+    readInboundStats(viewerPc, function (st) {
+      var video = $('remoteVideo');
+      if (!st) {
+        $('viewerStats').innerHTML = 'Waiting for media...<br>signalling <b>' +
+          escapeHtml(signalTransport()) + '</b>';
+        return;
+      }
+
+      var kbps = null, now = new Date().getTime();
+      if (viewerPrev) {
+        var dt = (now - viewerPrev.t) / 1000;
+        if (dt > 0) kbps = ((st.bytes - viewerPrev.bytes) * 8) / 1000 / dt;
+      }
+      var flowing = viewerPrev ? st.bytes > viewerPrev.bytes : st.bytes > 0;
+      viewerPrev = { t: now, bytes: st.bytes };
+
+      var res = (st.width || '?') + 'x' + (st.height || '?');
+      var lines = [];
+      lines.push('video <b>' + escapeHtml(st.codec) + '</b> ' + escapeHtml(res) + ' @ ' + st.fps + ' fps');
+      lines.push('bitrate <b>' + fmtKbps(kbps) + '</b>' +
+                 (st.lost != null ? ' &middot; lost <b>' + st.lost + '</b>' : ''));
+      if (st.decoder) lines.push('decoder <b>' + escapeHtml(st.decoder) + '</b>');
+      if (st.audioCodec) lines.push('audio <b>' + escapeHtml(st.audioCodec) + '</b>' +
+                                    (video.muted ? ' (muted)' : ''));
+      if (st.rtt != null) lines.push('rtt <b>' + st.rtt + ' ms</b>');
+      lines.push('signalling <b>' + escapeHtml(signalTransport()) + '</b>');
+
+      /* A black screen has two very different causes and the numbers tell them
+       * apart: nothing arriving is a network problem, whereas bytes arriving
+       * with no painted frames is a decode or attach problem. */
+      var painted = video.videoWidth > 0;
+      if (!flowing) {
+        lines.push('<span style="color:#ff8fa3">no media arriving &mdash; ' +
+                   'check the firewall, or tick &quot;Strip .local candidates&quot; on the computer</span>');
+        setPill($('playStatus'), 'warn', 'No media');
+      } else if (!painted) {
+        lines.push('<span style="color:#ff8fa3">data is arriving but no frames render &mdash; ' +
+                   'this TV cannot decode <b>' + escapeHtml(st.codec) + '</b></span>');
+        setPill($('playStatus'), 'err', 'Cannot decode');
+      } else {
+        setPill($('playStatus'), 'ok', 'Playing');
+      }
+
+      $('viewerStats').innerHTML = lines.join('<br>');
+
+      // Mirror the numbers back to the sender: nobody can read the TV's HUD
+      // from the machine that is doing the sharing.
+      if (viewerHostId) {
+        sendSignal(viewerHostId, {
+          kind: 'stats', codec: st.codec, res: res, fps: st.fps,
+          kbpsLabel: fmtKbps(kbps),
+          note: !flowing ? 'no media arriving' : (!painted ? 'arriving but not decoding' : null)
+        });
+      }
+    });
   }
 
   function reconnectViewer() {
@@ -2013,8 +2129,7 @@ body.pseudo-fs .hud { z-index: 10000; }
     if (viewerStatsTimer) { clearInterval(viewerStatsTimer); viewerStatsTimer = null; }
     if (viewerPc) { try { viewerPc.close(); } catch (e) {} viewerPc = null; }
     pendingCandidates = [];
-    var v = $('remoteVideo');
-    try { v.srcObject = null; } catch (e) { v.removeAttribute('src'); }
+    detachStream($('remoteVideo'));
     if (socket) { socket.disconnect(); socket = null; }
     $('startOverlay').className = 'overlay';
   }
