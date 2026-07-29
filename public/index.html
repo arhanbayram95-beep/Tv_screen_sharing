@@ -773,6 +773,40 @@ body.pseudo-fs .hud { z-index: 10000; }
     return out.join('\r\n');
   }
 
+  /* Removes a codec and everything that references it. Used when a peer has
+   * already told us it cannot handle H.264. */
+  function sdpDropCodec(sdp, name) {
+    var lines = splitSdp(sdp);
+    var bounds = sectionBounds(lines, 'video');
+    if (!bounds) return sdp;
+
+    var doomed = {}, apt = {}, i, m;
+    for (i = bounds.start + 1; i < bounds.end; i++) {
+      m = /^a=rtpmap:(\d+)\s+([^/]+)\//.exec(lines[i]);
+      if (m && m[2].toLowerCase() === name) doomed[m[1]] = true;
+      m = /^a=fmtp:(\d+)\s+.*apt=(\d+)/.exec(lines[i]);
+      if (m) apt[m[1]] = m[2];
+    }
+    for (var pt in apt) if (apt.hasOwnProperty(pt) && doomed[apt[pt]]) doomed[pt] = true;
+
+    var mParts = lines[bounds.start].split(' ');
+    var kept = [];
+    var payloads = mParts.slice(3);
+    for (i = 0; i < payloads.length; i++) if (!doomed[payloads[i]]) kept.push(payloads[i]);
+    if (!kept.length) return sdp;
+
+    var out = [];
+    for (i = 0; i < lines.length; i++) {
+      if (i === bounds.start) { out.push(mParts.slice(0, 3).concat(kept).join(' ')); continue; }
+      if (i > bounds.start && i < bounds.end) {
+        m = /^a=(?:rtpmap|fmtp|rtcp-fb):(\d+)/.exec(lines[i]);
+        if (m && doomed[m[1]]) continue;
+      }
+      out.push(lines[i]);
+    }
+    return out.join('\r\n');
+  }
+
   function sdpStripAllExtmap(sdp) {
     var lines = splitSdp(sdp);
     var out = [];
@@ -800,7 +834,8 @@ body.pseudo-fs .hud { z-index: 10000; }
    * unusable, so three H.264 profiles alongside RED and ULPFEC is a liability;
    * but stripping to H.264 alone fails outright on a set whose WebRTC build has
    * no H.264, which is common on Linux-based TV firmware. */
-  function sdpKeepSingleH264(sdp, keepFallback) {
+  function sdpKeepSingleH264(sdp, keepFallback, primaryName) {
+    var primary = primaryName || 'h264';
     var lines = splitSdp(sdp);
     var bounds = sectionBounds(lines, 'video');
     if (!bounds) return sdp;
@@ -821,14 +856,16 @@ body.pseudo-fs .hud { z-index: 10000; }
     var payloads = mParts.slice(3);
     var h264 = [];
     for (i = 0; i < payloads.length; i++) {
-      if (rtpmap[payloads[i]] === 'h264') h264.push(payloads[i]);
+      if (rtpmap[payloads[i]] === primary) h264.push(payloads[i]);
     }
     if (!h264.length) return sdp;
 
-    h264.sort(function (a, b) { return h264Rank(fmtp[b]) - h264Rank(fmtp[a]); });
+    if (primary === 'h264') {
+      h264.sort(function (a, b) { return h264Rank(fmtp[b]) - h264Rank(fmtp[a]); });
+    }
     var keep = [h264[0]];
 
-    if (keepFallback) {
+    if (keepFallback && primary === 'h264') {
       // One fallback for sets with no H.264 decoder. VP8 first: every WebRTC
       // build has it, and VP9/AV1 are heavier than such a set can manage.
       var order = ['vp8', 'vp9'];
@@ -885,11 +922,11 @@ body.pseudo-fs .hud { z-index: 10000; }
 
   /* Everything that has to be true of an SDP before it goes over the wire to
    * a TV, applied on both ends so an older peer on either side is covered. */
-  function sdpForLegacyPeer(sdp, maxCompat, strictH264) {
+  function sdpForLegacyPeer(sdp, maxCompat, strictH264, primaryName) {
     sdp = sdpStripExtmapAllowMixed(sdp);
     if (!maxCompat) return sdp;
     sdp = sdpStripAllExtmap(sdp);
-    sdp = sdpKeepSingleH264(sdp, !strictH264);
+    sdp = sdpKeepSingleH264(sdp, !strictH264, primaryName);
     // Pre-2019 stacks predate transport-wide congestion control; goog-remb,
     // nack and PLI stay, so bandwidth estimation still functions.
     sdp = sdpStripRtcpFb(sdp, 'transport-cc');
@@ -1318,7 +1355,7 @@ body.pseudo-fs .hud { z-index: 10000; }
   }
 
   /* Prefer H.264 via the supported API; SDP munging is the fallback below. */
-  function applyCodecPreferences(pc, strict) {
+  function applyCodecPreferences(pc, strict, excludeH264) {
     if (!window.RTCRtpSender || !RTCRtpSender.getCapabilities || !pc.getTransceivers) return false;
     var caps;
     try { caps = RTCRtpSender.getCapabilities('video'); } catch (e) { return false; }
@@ -1331,6 +1368,23 @@ body.pseudo-fs .hud { z-index: 10000; }
       if (mt === 'video/h264') h264.push(c);
       else if (mt === 'video/rtx' || mt === 'video/red' || mt === 'video/ulpfec') helpers.push(c);
       else others.push(c);
+    }
+    if (excludeH264) {
+      if (!others.length) return false;
+      var vp8First = [];
+      for (var v = 0; v < others.length; v++) {
+        if (/vp8/i.test(others[v].mimeType || '')) vp8First.unshift(others[v]);
+        else vp8First.push(others[v]);
+      }
+      var withoutH264 = vp8First.concat(helpers);
+      var appliedAlt = false;
+      var trs = pc.getTransceivers();
+      for (var q = 0; q < trs.length; q++) {
+        var kindAlt = (trs[q].sender && trs[q].sender.track && trs[q].sender.track.kind);
+        if (kindAlt !== 'video' || !trs[q].setCodecPreferences) continue;
+        try { trs[q].setCodecPreferences(withoutH264); appliedAlt = true; } catch (e) {}
+      }
+      return appliedAlt;
     }
     if (!h264.length) {
       toast('This browser cannot encode H.264; the TV may not be able to decode the stream.', true);
@@ -1368,11 +1422,15 @@ body.pseudo-fs .hud { z-index: 10000; }
     }
   }
 
-  function senderOnViewerJoined(msg) {
+  function senderOnViewerJoined(msg, noH264) {
     if (!localStream) return;
     var s = senderSettings();
+    if (noH264) s.strictH264 = false;
     var pc = new PeerConnection(pcConfig());
-    peers[msg.viewerId] = { pc: pc, label: msg.label || msg.ip || 'TV', stats: null, mdnsOnly: true, prev: null };
+    peers[msg.viewerId] = {
+      pc: pc, label: msg.label || msg.ip || 'TV', stats: null, mdnsOnly: true,
+      prev: null, retried: !!noH264, noH264: !!noH264, error: null
+    };
 
     var tracks = localStream.getTracks();
     for (var i = 0; i < tracks.length; i++) {
@@ -1387,7 +1445,7 @@ body.pseudo-fs .hud { z-index: 10000; }
       }
     }
 
-    var codecApiWorked = applyCodecPreferences(pc, s.strictH264);
+    var codecApiWorked = applyCodecPreferences(pc, s.strictH264, noH264);
 
     pc.onicecandidate = function (e) {
       if (!e.candidate) return;
@@ -1415,7 +1473,8 @@ body.pseudo-fs .hud { z-index: 10000; }
 
     pcOp(pc, 'createOffer').then(function (offer) {
       var sdp = offer.sdp;
-      if (!codecApiWorked) sdp = sdpPreferH264(sdp, s.strictH264);
+      if (noH264) sdp = sdpDropCodec(sdp, 'h264');
+      else if (!codecApiWorked) sdp = sdpPreferH264(sdp, s.strictH264);
       sdp = sdpSetBitrate(sdp, 'video', s.kbps);
       if (s.stereo) sdp = sdpStereoOpus(sdp);
 
@@ -1431,7 +1490,8 @@ body.pseudo-fs .hud { z-index: 10000; }
       // this end negotiated locally.
       sendSignal(msg.viewerId, {
         kind: 'offer',
-        sdp: sdpForLegacyPeer(pc.localDescription.sdp, s.maxCompat, s.strictH264),
+        sdp: sdpForLegacyPeer(pc.localDescription.sdp, s.maxCompat, s.strictH264,
+                              noH264 ? 'vp8' : 'h264'),
         type: pc.localDescription.type
       });
       renderViewerList();
@@ -1462,6 +1522,30 @@ body.pseudo-fs .hud { z-index: 10000; }
       } catch (e) {}
     } else if (data.kind === 'stats') {
       entry.stats = data;
+      renderViewerList();
+    } else if (data.kind === 'error') {
+      entry.error = data.message;
+      renderViewerList();
+      retryWithoutH264(msg.from);
+    }
+  }
+
+  /* A set whose WebRTC build predates H.264 - anything on Chromium 49, which
+   * is what several 2016-era TV browsers still ship - rejects the offer
+   * outright. Rather than make the user diagnose that, re-offer once with
+   * H.264 removed so VP8 is the only thing left to agree on. */
+  function retryWithoutH264(viewerId) {
+    var entry = peers[viewerId];
+    if (!entry || entry.retried || !localStream) return;
+    var label = entry.label;
+    var reported = entry.error;
+    entry.retried = true;
+    toast('The TV rejected that offer. Retrying without H.264...');
+    closePeer(viewerId);
+    senderOnViewerJoined({ viewerId: viewerId, label: label }, true);
+    // Keep what the TV said visible; the replacement entry starts blank.
+    if (peers[viewerId]) {
+      peers[viewerId].error = reported;
       renderViewerList();
     }
   }
@@ -1497,6 +1581,10 @@ body.pseudo-fs .hud { z-index: 10000; }
       var entry = peers[ids[i]];
       var state = entry.pc.connectionState || entry.pc.iceConnectionState || 'new';
       var line = '<div class="viewer-item"><b>' + escapeHtml(entry.label) + '</b> &mdash; ' + state;
+      if (entry.noH264) line += ' <span class="muted">(VP8 fallback)</span>';
+      if (entry.error) {
+        line += '<br><span style="color:#ff8fa3">TV reported: ' + escapeHtml(entry.error) + '</span>';
+      }
       if (entry.stats) {
         line += '<br><span class="muted">decoding ' + escapeHtml(entry.stats.codec || '?') +
                 ' &middot; ' + escapeHtml(entry.stats.res || '?') +
@@ -1687,7 +1775,11 @@ body.pseudo-fs .hud { z-index: 10000; }
         sendSignal(viewerHostId, { kind: 'answer', sdp: local.sdp });
       })['catch'](function (err) {
         setPill($('playStatus'), 'err', 'Failed');
-        toast('Could not accept the stream: ' + err, true);
+        var message = (err && err.message) || String(err);
+        toast('Could not accept the stream: ' + message, true);
+        // Report it back: the sender is the end with a keyboard and a person
+        // sitting at it, and it can retry with different codecs.
+        if (viewerHostId) sendSignal(viewerHostId, { kind: 'error', message: message });
       });
   }
 

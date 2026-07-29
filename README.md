@@ -195,7 +195,14 @@ whether WebRTC and WebSocket exist, and — the part that matters — **the exac
 that browser can receive**. It is also reachable from the PIN screen via *What this TV supports*.
 
 If it reports no H.264, this whole tool's default assumption is wrong for your set: untick
-*Force H.264 only* on the sender so a codec the TV does have can be negotiated.
+*Force H.264 only* on the sender so a codec the TV does have can be negotiated. Sets built on
+**Chromium 49 or older** — several 2016-era Philips/Opera TV browsers, identifiable by
+`Chrome/49` in the report — have no H.264 in WebRTC at all, only VP8, because H.264 did not
+reach Chromium's WebRTC until version 50-52.
+
+The sender also recovers from this on its own: if a TV rejects the offer, it re-offers once with
+H.264 removed entirely, and shows the TV's error text under *Connected TVs* so the failure is
+readable from the keyboard rather than the sofa.
 
 ---
 
