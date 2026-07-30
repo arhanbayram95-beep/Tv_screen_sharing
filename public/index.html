@@ -295,6 +295,7 @@ body.pseudo-fs .hud { z-index: 10000; }
       <h2>Preview</h2>
       <video id="localVideo" autoplay muted playsinline
              style="width:100%;background:#000;border-radius:10px;max-height:300px"></video>
+      <div id="audioNote" class="stats hidden" style="margin-top:10px"></div>
       <div id="senderStats" class="stats" style="margin-top:12px">Not sharing.</div>
     </div>
   </div>
@@ -418,6 +419,11 @@ body.pseudo-fs .hud { z-index: 10000; }
       </div>
     </div>
 
+    <div id="muteBadge" class="hidden" style="position:absolute;top:4vh;left:50%;
+         -webkit-transform:translateX(-50%);transform:translateX(-50%);
+         background:rgba(74,21,32,.92);border:2px solid #b8394b;border-radius:12px;
+         padding:12px 22px;font-size:1.2rem;font-weight:700"></div>
+
     <div id="hud" class="hud">
       <div class="row spread" style="margin:0">
         <span id="playStatus" class="pill busy"><span class="dot"></span>Connecting</span>
@@ -463,7 +469,7 @@ body.pseudo-fs .hud { z-index: 10000; }
   /* Bumped on every change that matters to the TV. Displayed on screen so a
    * stale cached page is obvious at a glance instead of costing a debugging
    * round trip. */
-  var BUILD = 'build 9';
+  var BUILD = 'build 10';
 
   function $(id) { return document.getElementById(id); }
   function on(el, ev, fn) { if (el) el.addEventListener(ev, fn, false); }
@@ -625,6 +631,11 @@ body.pseudo-fs .hud { z-index: 10000; }
       if (currentView === 'play' && !$('startOverlay').className.match(/hidden/)) {
         e.preventDefault();
         startPlayback(true);
+      } else if (currentView === 'play' && $('remoteVideo').muted) {
+        // Overlay already dismissed but still silent: OK is the obvious key to
+        // reach for, so make it the one that fixes it.
+        e.preventDefault();
+        toggleMute();
       }
       return;
     }
@@ -1298,9 +1309,7 @@ body.pseudo-fs .hud { z-index: 10000; }
       if (vt) {
         vt.onended = function () { toast('Sharing stopped.'); stopSharing(); };
       }
-      if (!stream.getAudioTracks().length && source === 'screen') {
-        toast('No audio track: tick "Share system audio" in the picker to send sound.');
-      }
+      showAudioState(stream, source);
       requestWakeLock();
 
       var sock = ensureSocket();
@@ -1379,6 +1388,26 @@ body.pseudo-fs .hud { z-index: 10000; }
     wakeLock = null;
   }
 
+  /* Whether audio was captured is decided once, in a dialog that is already
+   * gone by the time anyone wonders why the TV is silent. Keep the answer on
+   * screen for the whole session. */
+  function showAudioState(stream, source) {
+    var el = $('audioNote');
+    if (stream.getAudioTracks().length) {
+      el.className = 'stats';
+      el.innerHTML = '<span style="color:#6ee7a0">audio captured</span> &mdash; ' +
+        'press OK on the TV to unmute it';
+      return;
+    }
+    el.className = 'stats';
+    el.innerHTML = '<span style="color:#ff8fa3">no audio captured</span><br>' +
+      (source === 'camera'
+        ? 'The microphone was not granted.'
+        : 'Stop, share again, and tick <b>Share system audio</b> in the picker. ' +
+          'On Windows that option only appears for <b>Entire Screen</b> or a <b>Chrome Tab</b>, ' +
+          'never for a single window.');
+  }
+
   function applyContentHint(hint) {
     if (!localStream) return;
     var tracks = localStream.getVideoTracks();
@@ -1406,6 +1435,7 @@ body.pseudo-fs .hud { z-index: 10000; }
     releaseWakeLock();
     renderViewerList();
     text($('senderStats'), 'Not sharing.');
+    $('audioNote').className = 'stats hidden';
     stopSenderStatsLoop();
   }
 
@@ -1727,6 +1757,7 @@ body.pseudo-fs .hud { z-index: 10000; }
   var viewerPrev = null;
   var viewerStatsTimer = null;
   var pendingCandidates = [];
+  var viewerHasAudio = null;
 
   function pinPush(ch) {
     if (pinBuffer.length >= 6) return;
@@ -1803,7 +1834,10 @@ body.pseudo-fs .hud { z-index: 10000; }
     }
 
     function useStream(stream) {
+      var audioTracks = stream.getAudioTracks ? stream.getAudioTracks() : [];
+      viewerHasAudio = audioTracks.length > 0;
       attachStream($('remoteVideo'), stream);
+      updateMuteButton();
       setPill($('playStatus'), 'ok', 'Receiving');
       // Muted autoplay is the only kind most TV browsers allow unprompted.
       var p = $('remoteVideo').play();
@@ -1912,6 +1946,19 @@ body.pseudo-fs .hud { z-index: 10000; }
   function updateMuteButton() {
     var v = $('remoteVideo');
     $('muteBtn').innerHTML = v.muted ? '🔇 Unmute' : '🔊 Mute';
+
+    /* "Silent because muted" and "silent because the sender captured no audio"
+     * look identical on a TV. Say which, and keep saying it. */
+    var badge = $('muteBadge');
+    if (viewerHasAudio === false) {
+      badge.className = '';
+      badge.innerHTML = 'No audio in this stream &mdash; the computer did not capture sound';
+    } else if (v.muted) {
+      badge.className = '';
+      badge.innerHTML = '🔇 Sound is muted &mdash; press <b>OK</b> or the <b>yellow</b> key';
+    } else {
+      badge.className = 'hidden';
+    }
   }
 
   function fullscreenElement() {

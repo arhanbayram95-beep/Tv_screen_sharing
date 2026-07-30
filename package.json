@@ -2,7 +2,24 @@
   "name": "tv-screen-share",
   "version": "1.0.0",
   "private": true,
-  "description": "Local-network screen sharing from a laptop to a Philips Smart TV browser over WebRTC (H.264 forced).",
+  "description": "Put your computer screen on a TV over Wi-Fi with no HDMI cable, using the TV's own browser. Works on 2016-era smart TVs.",
+  "keywords": [
+    "screen-sharing",
+    "webrtc",
+    "smart-tv",
+    "philips",
+    "saphi",
+    "android-tv",
+    "hdmi-alternative",
+    "screen-mirroring",
+    "legacy-browser",
+    "no-build-step"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/arhanbayram95-beep/Tv_screen_sharing.git"
+  },
   "main": "server.js",
   "engines": {
     "node": ">=18"
@@ -17,6 +34,5 @@
   "dependencies": {
     "express": "^4.21.2",
     "socket.io": "^4.8.1"
-  },
-  "license": "MIT"
+  }
 }

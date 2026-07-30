@@ -29,6 +29,21 @@ function flagValue(flag) {
   return value && value.charAt(0) !== '-' ? value : null;
 }
 
+function flagPresent(flag) {
+  return process.argv.indexOf(flag) >= 0;
+}
+
+// Used when `--stun` is given without a URL. Only reachable with internet
+// access, which is precisely when it is wanted.
+const DEFAULT_STUN = 'stun:stun.l.google.com:19302';
+
+function resolveStun() {
+  const explicit = flagValue('--stun');
+  if (explicit) return explicit;
+  if (flagPresent('--stun')) return DEFAULT_STUN;
+  return process.env.STUN_URL || '';
+}
+
 const config = {
   port: Number(flagValue('--port') || process.env.PORT || 3000),
   httpsPort: Number(flagValue('--https-port') || process.env.HTTPS_PORT || 3443),
@@ -43,10 +58,10 @@ const config = {
   tlsKey: process.env.TLS_KEY || '',
   // Empty by default: on a LAN, host candidates are enough and a STUN lookup
   // just adds a timeout when the box has no internet access.
-  stunUrl: process.env.STUN_URL || '',
-  turnUrl: process.env.TURN_URL || '',
-  turnUsername: process.env.TURN_USERNAME || '',
-  turnCredential: process.env.TURN_CREDENTIAL || '',
+  stunUrl: resolveStun(),
+  turnUrl: flagValue('--turn') || process.env.TURN_URL || '',
+  turnUsername: flagValue('--turn-user') || process.env.TURN_USERNAME || '',
+  turnCredential: flagValue('--turn-pass') || process.env.TURN_CREDENTIAL || '',
 };
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -439,6 +454,12 @@ function banner() {
     console.log('  ─────────────────────────────────────────────');
     console.log('  Screen capture only works on localhost over http.');
     console.log('  To share from a phone or another machine: npm run start:https');
+  }
+  if (config.stunUrl || config.turnUrl) {
+    console.log('  ─────────────────────────────────────────────');
+    if (config.stunUrl) console.log('  STUN: ' + config.stunUrl);
+    if (config.turnUrl) console.log('  TURN: ' + config.turnUrl);
+    console.log('  Viewers outside this network can connect.');
   }
   console.log('');
 }
